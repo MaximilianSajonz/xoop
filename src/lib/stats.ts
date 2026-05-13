@@ -55,3 +55,19 @@ export function pctDelta(current: number | null, prev: number | null): number | 
   if (current == null || prev == null || prev === 0) return null;
   return ((current - prev) / prev) * 100;
 }
+
+export function linearRegression(xs: number[], ys: number[]): { m: number; b: number } | null {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 3) return null;
+  const mx = avg(xs.slice(0, n))!;
+  const my = avg(ys.slice(0, n))!;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    num += dx * (ys[i] - my);
+    den += dx * dx;
+  }
+  if (den === 0) return null;
+  const m = num / den;
+  return { m, b: my - m * mx };
+}

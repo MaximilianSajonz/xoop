@@ -15,9 +15,8 @@ import {
   CartesianGrid,
   Legend,
   ReferenceLine,
-  ReferenceDot,
 } from "recharts";
-import { avg, fmt, pearson, rollingAvg, pctDelta } from "@/lib/stats";
+import { avg, fmt, pearson, rollingAvg, pctDelta, linearRegression, median } from "@/lib/stats";
 import { sportName } from "@/lib/sports";
 import { detectIntimacy, detectLateNight, detectMystery, detectRecoveryCliffs, detectHrvCrashes } from "@/lib/insights";
 
@@ -38,7 +37,6 @@ export type Sleep = {
 };
 export type Strain = { day: string; strain: number | null; avg_hr: number | null; max_hr: number | null; kj: number | null };
 export type Workout = { day: string; start_ts: string; end_ts: string | null; sport_id: number | null; strain: number | null; kj: number | null; minutes: number; avg_hr: number | null; max_hr: number | null };
-export type Annotation = { id: string; day: string; tag: string; value: number | null; note: string | null; created_at: string };
 
 const RANGES = [
   { label: "14d", days: 14 },
@@ -48,26 +46,8 @@ const RANGES = [
   { label: "All", days: 9999 },
 ];
 
-const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Insights", "Correlations", "Annotations"] as const;
+const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Compare", "Insights", "Correlations"] as const;
 type Tab = typeof TABS[number];
-
-const PRESET_TAGS = [
-  "smoked",
-  "alcohol",
-  "caffeine late",
-  "late meal",
-  "fasted",
-  "sick",
-  "travel",
-  "stressful day",
-  "sauna",
-  "cold plunge",
-  "period",
-  "supplement",
-  "sex",
-  "argument",
-  "good day",
-];
 
 const TOOLTIP_STYLE = { background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 8, fontSize: 12 } as const;
 
@@ -76,19 +56,16 @@ export default function Dashboard({
   sleep,
   strain,
   workouts,
-  annotations: initialAnnotations,
   lastSync,
 }: {
   recovery: Recovery[];
   sleep: Sleep[];
   strain: Strain[];
   workouts: Workout[];
-  annotations: Annotation[];
   lastSync: string | null;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
   const [days, setDays] = useState(90);
-  const [annotations, setAnnotations] = useState(initialAnnotations);
 
   const cutoff = useMemo(() => {
     const d = new Date();
@@ -100,17 +77,6 @@ export default function Dashboard({
   const s = sleep.filter((x) => x.day >= cutoff);
   const st = strain.filter((x) => x.day >= cutoff);
   const w = workouts.filter((x) => x.day >= cutoff);
-  const ann = annotations.filter((x) => x.day >= cutoff);
-
-  const annByDay = useMemo(() => {
-    const m = new Map<string, Annotation[]>();
-    for (const a of ann) {
-      const arr = m.get(a.day) ?? [];
-      arr.push(a);
-      m.set(a.day, arr);
-    }
-    return m;
-  }, [ann]);
 
   return (
     <div className="space-y-6">
@@ -150,23 +116,14 @@ export default function Dashboard({
         </nav>
       </div>
 
-      {tab === "Overview" && <Overview recovery={r} sleep={s} strain={st} workouts={w} annByDay={annByDay} />}
-      {tab === "Recovery" && <RecoveryTab recovery={r} annByDay={annByDay} />}
+      {tab === "Overview" && <Overview recovery={r} sleep={s} strain={st} workouts={w} />}
+      {tab === "Recovery" && <RecoveryTab recovery={r} />}
       {tab === "Sleep" && <SleepTab sleep={s} />}
       {tab === "Strain" && <StrainTab strain={st} />}
       {tab === "Workouts" && <WorkoutsTab workouts={w} />}
+      {tab === "Compare" && <CompareTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} />}
       {tab === "Insights" && <InsightsTab workouts={w} recovery={r} />}
       {tab === "Correlations" && <CorrelationsTab recovery={r} sleep={s} strain={st} />}
-      {tab === "Annotations" && (
-        <AnnotationsTab
-          annotations={ann}
-          allAnnotations={annotations}
-          recovery={r}
-          sleep={s}
-          strain={st}
-          onChange={setAnnotations}
-        />
-      )}
     </div>
   );
 }
@@ -215,13 +172,11 @@ function Overview({
   sleep,
   strain,
   workouts,
-  annByDay,
 }: {
   recovery: Recovery[];
   sleep: Sleep[];
   strain: Strain[];
   workouts: Workout[];
-  annByDay: Map<string, Annotation[]>;
 }) {
   const half = Math.floor(recovery.length / 2);
   const currentAvg = avg(recovery.slice(half).map((x) => x.recovery_score));
@@ -266,15 +221,9 @@ function Overview({
               <ReferenceLine y={34} stroke="#f59e0b" strokeDasharray="3 3" />
               <Line type="monotone" dataKey="recovery_score" stroke="#10b981" strokeWidth={1.5} dot={false} name="Daily" />
               <Line type="monotone" dataKey="rolling" stroke="#fbbf24" strokeWidth={2.5} dot={false} name="7d avg" />
-              {[...annByDay.entries()].map(([day, anns]) => {
-                const row = recWithRolling.find((x) => x.day === day);
-                if (!row?.recovery_score) return null;
-                return <ReferenceDot key={day} x={day} y={row.recovery_score} r={4} fill="#a78bfa" stroke="#fff" strokeWidth={1} />;
-              })}
               <Legend wrapperStyle={{ fontSize: 12 }} />
             </LineChart>
           </ResponsiveContainer>
-          <p className="mt-2 text-xs text-neutral-500">Purple dots = annotated days. Switch to <em>Annotations</em> tab to add.</p>
         </Card>
       </Section>
 
@@ -316,20 +265,14 @@ function Overview({
 
 // ---------- Recovery tab ----------
 
-function RecoveryTab({ recovery, annByDay }: { recovery: Recovery[]; annByDay: Map<string, Annotation[]> }) {
+function RecoveryTab({ recovery }: { recovery: Recovery[] }) {
   const rRoll = rollingAvg(recovery, "recovery_score", 7);
   const hrvRoll = rollingAvg(recovery, "hrv", 7);
   const rhrRoll = rollingAvg(recovery, "rhr", 7);
 
-  const lowDays = recovery.filter((x) => (x.recovery_score ?? 100) < 34).sort((a, b) => b.day.localeCompare(a.day));
-  const highDays = recovery.filter((x) => (x.recovery_score ?? 0) >= 67).sort((a, b) => b.day.localeCompare(a.day));
-
-  const hrvAvg = avg(recovery.map((x) => x.hrv));
-  const hrvAnomalies = recovery.filter((x) => x.hrv != null && hrvAvg != null && x.hrv < hrvAvg * 0.7);
-
   return (
     <div className="space-y-8">
-      <Section title="Recovery score" subtitle="Daily + 7-day rolling avg + annotations">
+      <Section title="Recovery score" subtitle="Daily + 7-day rolling avg">
         <Card>
           <ResponsiveContainer width="100%" height={320}>
             <LineChart data={rRoll}>
@@ -341,14 +284,15 @@ function RecoveryTab({ recovery, annByDay }: { recovery: Recovery[]; annByDay: M
               <ReferenceLine y={34} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: "yellow", fill: "#f59e0b", fontSize: 10 }} />
               <Line type="monotone" dataKey="recovery_score" stroke="#10b981" strokeWidth={1.5} dot={false} name="Daily" />
               <Line type="monotone" dataKey="rolling" stroke="#fbbf24" strokeWidth={2.5} dot={false} name="7d avg" />
-              {[...annByDay.entries()].map(([day]) => {
-                const row = rRoll.find((x) => x.day === day);
-                if (!row?.recovery_score) return null;
-                return <ReferenceDot key={day} x={day} y={row.recovery_score} r={4} fill="#a78bfa" stroke="#fff" strokeWidth={1} />;
-              })}
               <Legend wrapperStyle={{ fontSize: 12 }} />
             </LineChart>
           </ResponsiveContainer>
+        </Card>
+      </Section>
+
+      <Section title="Recovery heatmap" subtitle="GitHub-style calendar — green = recovered, red = depleted">
+        <Card>
+          <CalendarHeatmap data={recovery} />
         </Card>
       </Section>
 
@@ -385,48 +329,177 @@ function RecoveryTab({ recovery, annByDay }: { recovery: Recovery[]; annByDay: M
         </Section>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <Section title={`🔴 Low recovery (${lowDays.length})`} subtitle="< 34%">
-          <Card className="max-h-72 overflow-auto">
-            <ul className="space-y-1 text-sm">
-              {lowDays.map((d) => (
-                <li key={d.day} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
-                  <span className="text-neutral-300">{d.day}</span>
-                  <span className="text-red-400 font-medium">{d.recovery_score}%</span>
-                </li>
-              ))}
-              {!lowDays.length && <li className="text-neutral-500">None 🎉</li>}
-            </ul>
-          </Card>
-        </Section>
-        <Section title={`🟢 High recovery (${highDays.length})`} subtitle="≥ 67%">
-          <Card className="max-h-72 overflow-auto">
-            <ul className="space-y-1 text-sm">
-              {highDays.map((d) => (
-                <li key={d.day} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
-                  <span className="text-neutral-300">{d.day}</span>
-                  <span className="text-emerald-400 font-medium">{d.recovery_score}%</span>
-                </li>
-              ))}
-              {!highDays.length && <li className="text-neutral-500">—</li>}
-            </ul>
-          </Card>
-        </Section>
-        <Section title={`⚠️ HRV anomalies (${hrvAnomalies.length})`} subtitle={`< 70% of avg (${fmt(hrvAvg)} ms)`}>
-          <Card className="max-h-72 overflow-auto">
-            <ul className="space-y-1 text-sm">
-              {hrvAnomalies.map((d) => (
-                <li key={d.day} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
-                  <span className="text-neutral-300">{d.day}</span>
-                  <span className="text-amber-400 font-medium">{fmt(d.hrv, 1)} ms</span>
-                </li>
-              ))}
-              {!hrvAnomalies.length && <li className="text-neutral-500">None</li>}
-            </ul>
-          </Card>
-        </Section>
+      <Section title="Recovery distribution" subtitle="how many days in each band">
+        <Card>
+          <RecoveryDistribution data={recovery} />
+        </Card>
+      </Section>
+
+      <Section title="Day-of-week pattern" subtitle="avg recovery by weekday">
+        <Card>
+          <WeekdayPattern data={recovery} />
+        </Card>
+      </Section>
+    </div>
+  );
+}
+
+// ---------- Calendar heatmap ----------
+
+function recoveryColor(score: number | null | undefined): string {
+  if (score == null) return "#1a1a1a";
+  if (score >= 67) return `rgba(16, 185, 129, ${0.3 + (score - 67) / 100})`;
+  if (score >= 34) return `rgba(245, 158, 11, ${0.3 + (score - 34) / 100})`;
+  return `rgba(239, 68, 68, ${0.3 + (34 - score) / 100})`;
+}
+
+function CalendarHeatmap({ data }: { data: Recovery[] }) {
+  const byDay = useMemo(() => new Map(data.map((d) => [d.day, d])), [data]);
+  if (!data.length) return <p className="text-sm text-neutral-500">No data.</p>;
+
+  const firstDay = new Date(data[0].day);
+  const lastDay = new Date(data[data.length - 1].day);
+
+  // align to Monday of first week
+  const start = new Date(firstDay);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(lastDay);
+  end.setDate(end.getDate() + (7 - ((end.getDay() + 6) % 7)) % 7);
+
+  const weeks: { date: Date; dayStr: string }[][] = [];
+  let cur = new Date(start);
+  let week: { date: Date; dayStr: string }[] = [];
+  while (cur <= end) {
+    week.push({ date: new Date(cur), dayStr: cur.toISOString().slice(0, 10) });
+    if (week.length === 7) {
+      weeks.push(week);
+      week = [];
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  if (week.length) weeks.push(week);
+
+  const monthLabels: { col: number; label: string }[] = [];
+  let lastMonth = -1;
+  weeks.forEach((w, i) => {
+    const m = w[0].date.getMonth();
+    if (m !== lastMonth) {
+      monthLabels.push({ col: i, label: w[0].date.toLocaleDateString("en-US", { month: "short" }) });
+      lastMonth = m;
+    }
+  });
+
+  const weekdayLabels = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="inline-block min-w-full">
+        <div className="ml-8 flex text-[10px] text-neutral-500" style={{ gap: 3 }}>
+          {monthLabels.map((m, i) => {
+            const prev = i === 0 ? 0 : monthLabels[i - 1].col;
+            const span = m.col - prev;
+            return (
+              <span key={i} style={{ width: span * 15 }}>
+                {i === 0 ? "" : m.label}
+              </span>
+            );
+          })}
+        </div>
+        <div className="flex" style={{ gap: 3 }}>
+          <div className="flex flex-col text-[10px] text-neutral-500" style={{ gap: 3, marginTop: 0, width: 28 }}>
+            {weekdayLabels.map((d, i) => (
+              <div key={i} style={{ height: 12, lineHeight: "12px" }}>{d}</div>
+            ))}
+          </div>
+          <div className="flex" style={{ gap: 3 }}>
+            {weeks.map((w, i) => (
+              <div key={i} className="flex flex-col" style={{ gap: 3 }}>
+                {w.map((d) => {
+                  const r = byDay.get(d.dayStr);
+                  return (
+                    <div
+                      key={d.dayStr}
+                      title={`${d.dayStr} — ${r?.recovery_score != null ? r.recovery_score + "%" : "no data"}`}
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 2,
+                        background: recoveryColor(r?.recovery_score),
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3 ml-8 flex items-center gap-2 text-[10px] text-neutral-500">
+          <span>Less</span>
+          {[10, 30, 50, 70, 90].map((v) => (
+            <div key={v} style={{ width: 12, height: 12, borderRadius: 2, background: recoveryColor(v) }} />
+          ))}
+          <span>More</span>
+        </div>
       </div>
     </div>
+  );
+}
+
+// ---------- Distribution histogram ----------
+
+function RecoveryDistribution({ data }: { data: Recovery[] }) {
+  const bins = Array.from({ length: 10 }, (_, i) => ({ range: `${i * 10}-${i * 10 + 9}`, count: 0, mid: i * 10 + 5 }));
+  for (const r of data) {
+    if (r.recovery_score == null) continue;
+    const idx = Math.min(9, Math.floor(r.recovery_score / 10));
+    bins[idx].count++;
+  }
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <BarChart data={bins}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+        <XAxis dataKey="range" stroke="#666" tick={{ fontSize: 11 }} />
+        <YAxis stroke="#666" tick={{ fontSize: 11 }} />
+        <Tooltip contentStyle={TOOLTIP_STYLE} />
+        <Bar dataKey="count">
+          {bins.map((b, i) => (
+            <Bar key={i} dataKey="count" fill={recoveryColor(b.mid)} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ---------- Day-of-week pattern ----------
+
+function WeekdayPattern({ data }: { data: Recovery[] }) {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const bins = days.map((d) => ({ day: d, scores: [] as number[], hrvs: [] as number[] }));
+  for (const r of data) {
+    if (r.recovery_score == null) continue;
+    const idx = (new Date(r.day).getDay() + 6) % 7;
+    bins[idx].scores.push(r.recovery_score);
+    if (r.hrv != null) bins[idx].hrvs.push(r.hrv);
+  }
+  const chart = bins.map((b) => ({
+    day: b.day,
+    recovery: b.scores.length ? b.scores.reduce((a, c) => a + c, 0) / b.scores.length : null,
+    hrv: b.hrvs.length ? b.hrvs.reduce((a, c) => a + c, 0) / b.hrvs.length : null,
+  }));
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <BarChart data={chart}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+        <XAxis dataKey="day" stroke="#666" tick={{ fontSize: 11 }} />
+        <YAxis yAxisId="left" stroke="#10b981" tick={{ fontSize: 11 }} domain={[0, 100]} />
+        <YAxis yAxisId="right" orientation="right" stroke="#60a5fa" tick={{ fontSize: 11 }} />
+        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => (v == null ? "—" : Number(v).toFixed(1))} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Bar yAxisId="left" dataKey="recovery" fill="#10b981" name="Recovery %" />
+        <Bar yAxisId="right" dataKey="hrv" fill="#60a5fa" name="HRV ms" />
+      </BarChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -909,6 +982,14 @@ function ScatterCard({ title, xLabel, yLabel, data, corr, interpret }: {
     Math.abs(corr) >= 0.3 ? "moderate" :
     Math.abs(corr) >= 0.15 ? "weak" : "noise";
   const dir = corr == null ? "" : corr > 0 ? "+" : "−";
+  const xs = data.map((d) => d.x);
+  const ys = data.map((d) => d.y);
+  const reg = linearRegression(xs, ys);
+  const xMin = xs.length ? Math.min(...xs) : 0;
+  const xMax = xs.length ? Math.max(...xs) : 0;
+  const xMed = median(xs);
+  const yMed = median(ys);
+  const trendColor = corr == null ? "#666" : Math.abs(corr) >= 0.3 ? "#fbbf24" : "#444";
   return (
     <Section title={title} subtitle={`r = ${corr == null ? "—" : dir + Math.abs(corr).toFixed(2)} (${strength}, n=${data.length})`}>
       <Card>
@@ -925,201 +1006,161 @@ function ScatterCard({ title, xLabel, yLabel, data, corr, interpret }: {
               labelFormatter={() => ""}
               cursor={{ strokeDasharray: "3 3" }}
             />
-            <Scatter data={data} fill="#10b981" />
+            {xMed != null && <ReferenceLine x={xMed} stroke="#2a2a2a" strokeDasharray="4 4" />}
+            {yMed != null && <ReferenceLine y={yMed} stroke="#2a2a2a" strokeDasharray="4 4" />}
+            {reg && (
+              <ReferenceLine
+                stroke={trendColor}
+                strokeWidth={2}
+                segment={[
+                  { x: xMin, y: reg.m * xMin + reg.b },
+                  { x: xMax, y: reg.m * xMax + reg.b },
+                ]}
+              />
+            )}
+            <Scatter data={data} fill="#10b981" fillOpacity={0.7} />
           </ScatterChart>
         </ResponsiveContainer>
+        <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-neutral-500">
+          <span><span className="inline-block h-0.5 w-6 align-middle" style={{ background: trendColor }} /> trend line</span>
+          <span><span className="inline-block h-0.5 w-6 border-t border-dashed border-neutral-600 align-middle" /> medians (4 quadrants)</span>
+        </div>
       </Card>
     </Section>
   );
 }
 
-// ---------- Annotations ----------
 
-function AnnotationsTab({
-  annotations,
-  allAnnotations,
+// ---------- Compare tab ----------
+
+function monthsInRange(allDays: string[]): string[] {
+  const set = new Set<string>();
+  for (const d of allDays) if (d) set.add(d.slice(0, 7));
+  return [...set].sort().reverse();
+}
+
+function rangeForMonth(month: string): { start: string; end: string; label: string } {
+  const [y, m] = month.split("-").map(Number);
+  const start = `${month}-01`;
+  const last = new Date(y, m, 0).getDate();
+  const end = `${month}-${String(last).padStart(2, "0")}`;
+  const label = new Date(y, m - 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  return { start, end, label };
+}
+
+function CompareTab({
   recovery,
   sleep,
   strain,
-  onChange,
+  workouts,
 }: {
-  annotations: Annotation[];
-  allAnnotations: Annotation[];
   recovery: Recovery[];
   sleep: Sleep[];
   strain: Strain[];
-  onChange: (next: Annotation[]) => void;
+  workouts: Workout[];
 }) {
-  const [day, setDay] = useState(new Date().toISOString().slice(0, 10));
-  const [tag, setTag] = useState(PRESET_TAGS[0]);
-  const [customTag, setCustomTag] = useState("");
-  const [value, setValue] = useState("");
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  const months = useMemo(() => monthsInRange(recovery.map((r) => r.day)), [recovery]);
+  const [a, setA] = useState(months[0] ?? "");
+  const [b, setB] = useState(months[1] ?? months[0] ?? "");
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const finalTag = (customTag.trim() || tag).toLowerCase();
-      const r = await fetch("/api/annotations", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          day,
-          tag: finalTag,
-          value: value ? Number(value) : null,
-          note: note || null,
-        }),
-      });
-      const j = await r.json();
-      if (j.annotation) {
-        onChange([j.annotation, ...allAnnotations]);
-        setCustomTag("");
-        setValue("");
-        setNote("");
-      } else {
-        alert(j.error ?? "failed");
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
+  if (!months.length) return <p className="text-sm text-neutral-400">No data to compare yet.</p>;
 
-  async function remove(id: string) {
-    if (!confirm("Delete this annotation?")) return;
-    await fetch(`/api/annotations?id=${id}`, { method: "DELETE" });
-    onChange(allAnnotations.filter((a) => a.id !== id));
-  }
+  const ra = rangeForMonth(a);
+  const rb = rangeForMonth(b);
 
-  // tag impact: avg recovery on tagged days vs all
-  const recByDay = new Map(recovery.map((r) => [r.day, r]));
-  const overallRec = avg(recovery.map((r) => r.recovery_score));
-  const overallHrv = avg(recovery.map((r) => r.hrv));
+  const slice = <T extends { day: string }>(arr: T[], r: { start: string; end: string }) =>
+    arr.filter((x) => x.day >= r.start && x.day <= r.end);
 
-  const tagsSeen = [...new Set(annotations.map((a) => a.tag))].sort();
-  const impact = tagsSeen.map((t) => {
-    const days = annotations.filter((a) => a.tag === t).map((a) => a.day);
-    const recs = days.map((d) => recByDay.get(d)?.recovery_score).filter((x): x is number => typeof x === "number");
-    const hrvs = days.map((d) => recByDay.get(d)?.hrv).filter((x): x is number => typeof x === "number");
-    return {
-      tag: t,
-      count: days.length,
-      avgRec: avg(recs),
-      avgHrv: avg(hrvs),
-      delta: avg(recs) != null && overallRec != null ? avg(recs)! - overallRec : null,
-      hrvDelta: avg(hrvs) != null && overallHrv != null ? avg(hrvs)! - overallHrv : null,
-    };
-  });
+  const aRec = slice(recovery, ra);
+  const bRec = slice(recovery, rb);
+  const aSlp = slice(sleep, ra).filter((s) => !s.nap);
+  const bSlp = slice(sleep, rb).filter((s) => !s.nap);
+  const aStr = slice(strain, ra);
+  const bStr = slice(strain, rb);
+  const aWkt = slice(workouts, ra);
+  const bWkt = slice(workouts, rb);
+
+  const metrics = [
+    { label: "Avg recovery", a: avg(aRec.map((x) => x.recovery_score)), b: avg(bRec.map((x) => x.recovery_score)), suffix: "%", digits: 0 },
+    { label: "Avg HRV", a: avg(aRec.map((x) => x.hrv)), b: avg(bRec.map((x) => x.hrv)), suffix: " ms", digits: 1 },
+    { label: "Avg RHR", a: avg(aRec.map((x) => x.rhr)), b: avg(bRec.map((x) => x.rhr)), suffix: " bpm", digits: 0 },
+    { label: "Avg strain", a: avg(aStr.map((x) => x.strain)), b: avg(bStr.map((x) => x.strain)), suffix: "", digits: 1 },
+    { label: "Sleep hours", a: avg(aSlp.map((x) => x.hours_in_bed)), b: avg(bSlp.map((x) => x.hours_in_bed)), suffix: " h", digits: 1 },
+    { label: "Sleep perf", a: avg(aSlp.map((x) => x.performance)), b: avg(bSlp.map((x) => x.performance)), suffix: "%", digits: 0 },
+    { label: "Workouts", a: aWkt.length, b: bWkt.length, suffix: "", digits: 0 },
+    { label: "Workout time", a: aWkt.reduce((s, x) => s + x.minutes, 0) / 60, b: bWkt.reduce((s, x) => s + x.minutes, 0) / 60, suffix: " h", digits: 1 },
+  ];
+
+  // build comparison series: day-of-month → value
+  const byDayA = new Map(aRec.map((r) => [Number(r.day.slice(-2)), r.recovery_score]));
+  const byDayB = new Map(bRec.map((r) => [Number(r.day.slice(-2)), r.recovery_score]));
+  const chartData = Array.from({ length: 31 }, (_, i) => ({
+    day: i + 1,
+    a: byDayA.get(i + 1) ?? null,
+    b: byDayB.get(i + 1) ?? null,
+  }));
 
   return (
     <div className="space-y-8">
-      <Section title="Add annotation" subtitle="Tag a day with a life event to correlate with biometrics">
-        <Card>
-          <form onSubmit={add} className="grid grid-cols-1 gap-3 md:grid-cols-6">
-            <div className="md:col-span-1">
-              <label className="block text-xs text-neutral-400">Date</label>
-              <input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="mt-1 w-full rounded border border-neutral-700 bg-black px-2 py-1.5 text-sm" />
-            </div>
-            <div className="md:col-span-1">
-              <label className="block text-xs text-neutral-400">Tag</label>
-              <select value={tag} onChange={(e) => setTag(e.target.value)} className="mt-1 w-full rounded border border-neutral-700 bg-black px-2 py-1.5 text-sm">
-                {PRESET_TAGS.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div className="md:col-span-1">
-              <label className="block text-xs text-neutral-400">Custom tag</label>
-              <input value={customTag} onChange={(e) => setCustomTag(e.target.value)} placeholder="overrides preset" className="mt-1 w-full rounded border border-neutral-700 bg-black px-2 py-1.5 text-sm" />
-            </div>
-            <div className="md:col-span-1">
-              <label className="block text-xs text-neutral-400">Value (optional)</label>
-              <input type="number" step="0.1" value={value} onChange={(e) => setValue(e.target.value)} placeholder="e.g. 3 units" className="mt-1 w-full rounded border border-neutral-700 bg-black px-2 py-1.5 text-sm" />
-            </div>
-            <div className="md:col-span-1">
-              <label className="block text-xs text-neutral-400">Note</label>
-              <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded border border-neutral-700 bg-black px-2 py-1.5 text-sm" />
-            </div>
-            <div className="md:col-span-1 flex items-end">
-              <button disabled={busy} className="w-full rounded bg-white px-3 py-1.5 text-sm font-medium text-black disabled:opacity-50">
-                {busy ? "…" : "Add"}
-              </button>
-            </div>
-          </form>
-        </Card>
-      </Section>
+      <Card>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="block text-xs text-neutral-400">Period A</label>
+            <select value={a} onChange={(e) => setA(e.target.value)} className="mt-1 w-full rounded border border-emerald-500/40 bg-black px-2 py-1.5 text-sm">
+              {months.map((m) => <option key={m} value={m}>{rangeForMonth(m).label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-neutral-400">Period B</label>
+            <select value={b} onChange={(e) => setB(e.target.value)} className="mt-1 w-full rounded border border-blue-500/40 bg-black px-2 py-1.5 text-sm">
+              {months.map((m) => <option key={m} value={m}>{rangeForMonth(m).label}</option>)}
+            </select>
+          </div>
+        </div>
+      </Card>
 
-      <Section title="Tag impact" subtitle="Avg recovery / HRV on tagged days vs overall">
-        <Card>
-          {impact.length ? (
-            <div className="overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="text-neutral-400">
-                  <tr>
-                    <th className="p-2 text-left">Tag</th>
-                    <th className="p-2 text-right">N</th>
-                    <th className="p-2 text-right">Avg recovery</th>
-                    <th className="p-2 text-right">Δ vs overall</th>
-                    <th className="p-2 text-right">Avg HRV</th>
-                    <th className="p-2 text-right">Δ HRV</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {impact.map((i) => (
-                    <tr key={i.tag} className="border-t border-neutral-800">
-                      <td className="p-2 font-medium">{i.tag}</td>
-                      <td className="p-2 text-right">{i.count}</td>
-                      <td className="p-2 text-right">{fmt(i.avgRec, 0)}%</td>
-                      <td className={`p-2 text-right font-medium ${i.delta != null && i.delta < 0 ? "text-red-400" : i.delta != null && i.delta > 0 ? "text-emerald-400" : "text-neutral-500"}`}>
-                        {i.delta == null ? "—" : (i.delta > 0 ? "+" : "") + i.delta.toFixed(1)}
-                      </td>
-                      <td className="p-2 text-right">{fmt(i.avgHrv, 1)}</td>
-                      <td className={`p-2 text-right ${i.hrvDelta != null && i.hrvDelta < 0 ? "text-red-400" : i.hrvDelta != null && i.hrvDelta > 0 ? "text-emerald-400" : "text-neutral-500"}`}>
-                        {i.hrvDelta == null ? "—" : (i.hrvDelta > 0 ? "+" : "") + i.hrvDelta.toFixed(1)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-3 text-xs text-neutral-500">Overall avg recovery: {fmt(overallRec, 0)}% · HRV {fmt(overallHrv, 1)} ms · range: current filter</p>
-            </div>
-          ) : (
-            <p className="text-sm text-neutral-500">No annotations in range yet. Add some above.</p>
-          )}
-        </Card>
-      </Section>
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {metrics.map((m) => {
+          const delta = m.a != null && m.b != null ? m.a - m.b : null;
+          const pct = m.b != null && m.b !== 0 && delta != null ? (delta / m.b) * 100 : null;
+          const better = m.label === "Avg RHR" ? delta != null && delta < 0 : delta != null && delta > 0;
+          const arrow = delta == null ? "" : delta > 0 ? "↗" : "↘";
+          const color = delta == null ? "text-neutral-500" : better ? "text-emerald-400" : "text-red-400";
+          return (
+            <Card key={m.label}>
+              <div className="text-[11px] uppercase tracking-widest text-neutral-500">{m.label}</div>
+              <div className="mt-2 grid grid-cols-3 items-center gap-2">
+                <div>
+                  <div className="text-[10px] text-emerald-400">A · {ra.label}</div>
+                  <div className="text-2xl font-semibold">{fmt(m.a, m.digits)}{m.suffix}</div>
+                </div>
+                <div className={`text-center text-sm font-medium ${color}`}>
+                  {delta == null ? "—" : `${arrow} ${delta > 0 ? "+" : ""}${delta.toFixed(m.digits)}`}
+                  {pct != null && <div className="text-[10px] text-neutral-500">{pct > 0 ? "+" : ""}{pct.toFixed(0)}%</div>}
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] text-blue-400">B · {rb.label}</div>
+                  <div className="text-2xl font-semibold">{fmt(m.b, m.digits)}{m.suffix}</div>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </section>
 
-      <Section title={`All annotations (${allAnnotations.length})`}>
+      <Section title="Recovery by day-of-month" subtitle="Overlay of both periods">
         <Card>
-          {allAnnotations.length ? (
-            <div className="max-h-96 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-neutral-900 text-neutral-400">
-                  <tr>
-                    <th className="p-2 text-left">Date</th>
-                    <th className="p-2 text-left">Tag</th>
-                    <th className="p-2 text-right">Value</th>
-                    <th className="p-2 text-left">Note</th>
-                    <th className="p-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allAnnotations.map((a) => (
-                    <tr key={a.id} className="border-t border-neutral-800">
-                      <td className="p-2">{a.day}</td>
-                      <td className="p-2"><span className="rounded bg-violet-500/20 px-2 py-0.5 text-xs text-violet-300">{a.tag}</span></td>
-                      <td className="p-2 text-right">{a.value ?? "—"}</td>
-                      <td className="p-2 text-neutral-400">{a.note ?? ""}</td>
-                      <td className="p-2 text-right">
-                        <button onClick={() => remove(a.id)} className="text-xs text-red-400 hover:text-red-300">delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-sm text-neutral-500">No annotations yet.</p>
-          )}
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+              <XAxis dataKey="day" stroke="#666" tick={{ fontSize: 11 }} />
+              <YAxis domain={[0, 100]} stroke="#666" tick={{ fontSize: 11 }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="a" stroke="#10b981" strokeWidth={2.5} dot={{ r: 2 }} name={ra.label} connectNulls />
+              <Line type="monotone" dataKey="b" stroke="#60a5fa" strokeWidth={2.5} dot={{ r: 2 }} name={rb.label} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
         </Card>
       </Section>
     </div>
