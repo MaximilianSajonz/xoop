@@ -51,7 +51,7 @@ function cycleToWakeDay(row: any): string | null {
 async function processJournal(rows: any[], sb: ReturnType<typeof sbAdmin>) {
   const errors: string[] = [];
   let inserted = 0;
-  const batch: any[] = [];
+  const byId = new Map<string, any>();
   for (const r of rows) {
     const day = cycleToWakeDay(r);
     const question = r["Question text"] ?? r["question"];
@@ -59,15 +59,17 @@ async function processJournal(rows: any[], sb: ReturnType<typeof sbAdmin>) {
     if (!day || !question) continue;
     const answer = String(answerRaw ?? "").toLowerCase();
     const id = `${day}|${question}`.toLowerCase().replace(/[^a-z0-9|]/g, "_").slice(0, 200);
-    batch.push({ id, day, question, answer, raw: r });
+    // last write wins — if a question is answered twice in same cycle, prefer "true"
+    const existing = byId.get(id);
+    if (existing && existing.answer === "true" && answer !== "true") continue;
+    byId.set(id, { id, day, question, answer, raw: r });
   }
-  if (batch.length) {
-    for (let i = 0; i < batch.length; i += 500) {
-      const chunk = batch.slice(i, i + 500);
-      const { error, count } = await sb.from("whoop_journal").upsert(chunk, { count: "exact" });
-      if (error) errors.push(error.message);
-      else inserted += count ?? chunk.length;
-    }
+  const batch = [...byId.values()];
+  for (let i = 0; i < batch.length; i += 500) {
+    const chunk = batch.slice(i, i + 500);
+    const { error, count } = await sb.from("whoop_journal").upsert(chunk, { count: "exact" });
+    if (error) errors.push(error.message);
+    else inserted += count ?? chunk.length;
   }
   return { inserted, errors };
 }
