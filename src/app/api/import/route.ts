@@ -16,11 +16,11 @@ type ImportResult = {
 
 function detectType(filename: string, headers: string[]): string {
   const f = filename.toLowerCase();
-  if (f.includes("heart_rate") || f.includes("hr_") || f.includes("bpm") || headers.includes("heart_rate") || headers.includes("bpm")) return "hr_samples";
-  if (f.includes("physiological") || f.includes("cycles")) return "cycles";
-  if (f.includes("sleep")) return "sleeps";
-  if (f.includes("workout")) return "workouts";
   if (f.includes("journal")) return "journal";
+  if (f.includes("physiological") || f.includes("cycles")) return "cycles_csv";
+  if (f.includes("sleep")) return "sleeps_csv";
+  if (f.includes("workout")) return "workouts_csv";
+  if (f.includes("heart_rate") || f.includes("hr_") || headers.some((h) => /bpm|heart\s*rate/i.test(h))) return "hr_samples";
   return "unknown";
 }
 
@@ -37,16 +37,49 @@ function parseNum(v: any): number | null {
   return isNaN(n) ? null : n;
 }
 
-async function processHrSamples(rows: any[], sb: ReturnType<typeof sbAdmin>): Promise<{ inserted: number; errors: string[] }> {
+// Whoop cycle start time is the evening before; we index by wake date to match `whoop_recovery.day`
+function cycleToWakeDay(row: any): string | null {
+  const end = parseTs(row["Cycle end time"]);
+  if (end) return end.slice(0, 10);
+  const start = parseTs(row["Cycle start time"]);
+  if (!start) return null;
+  const d = new Date(start);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+async function processJournal(rows: any[], sb: ReturnType<typeof sbAdmin>) {
   const errors: string[] = [];
   let inserted = 0;
-  const tsKeys = ["timestamp", "time", "ts", "datetime", "Heart Rate Timestamp", "Timestamp"];
-  const bpmKeys = ["bpm", "heart_rate", "Heart Rate", "hr"];
+  const batch: any[] = [];
+  for (const r of rows) {
+    const day = cycleToWakeDay(r);
+    const question = r["Question text"] ?? r["question"];
+    const answerRaw = r["Answered yes"] ?? r["answer"];
+    if (!day || !question) continue;
+    const answer = String(answerRaw ?? "").toLowerCase();
+    const id = `${day}|${question}`.toLowerCase().replace(/[^a-z0-9|]/g, "_").slice(0, 200);
+    batch.push({ id, day, question, answer, raw: r });
+  }
+  if (batch.length) {
+    for (let i = 0; i < batch.length; i += 500) {
+      const chunk = batch.slice(i, i + 500);
+      const { error, count } = await sb.from("whoop_journal").upsert(chunk, { count: "exact" });
+      if (error) errors.push(error.message);
+      else inserted += count ?? chunk.length;
+    }
+  }
+  return { inserted, errors };
+}
+
+async function processHrSamples(rows: any[], sb: ReturnType<typeof sbAdmin>) {
+  const errors: string[] = [];
+  let inserted = 0;
   if (!rows.length) return { inserted: 0, errors: ["empty file"] };
   const sample = rows[0];
-  const tsKey = tsKeys.find((k) => k in sample) ?? Object.keys(sample).find((k) => /time|ts|date/i.test(k));
-  const bpmKey = bpmKeys.find((k) => k in sample) ?? Object.keys(sample).find((k) => /bpm|heart/i.test(k));
-  if (!tsKey || !bpmKey) return { inserted: 0, errors: [`could not detect columns. headers: ${Object.keys(sample).join(", ")}`] };
+  const tsKey = Object.keys(sample).find((k) => /time|ts|date/i.test(k));
+  const bpmKey = Object.keys(sample).find((k) => /bpm|heart/i.test(k));
+  if (!tsKey || !bpmKey) return { inserted: 0, errors: [`columns not detected: ${Object.keys(sample).join(", ")}`] };
 
   const BATCH = 1000;
   for (let i = 0; i < rows.length; i += BATCH) {
@@ -61,26 +94,10 @@ async function processHrSamples(rows: any[], sb: ReturnType<typeof sbAdmin>): Pr
   return { inserted, errors };
 }
 
-async function processJournal(rows: any[], sb: ReturnType<typeof sbAdmin>): Promise<{ inserted: number; errors: string[] }> {
+async function processRaw(rows: any[], filename: string, sb: ReturnType<typeof sbAdmin>) {
   const errors: string[] = [];
   let inserted = 0;
-  for (const r of rows) {
-    const day = parseTs(r["Cycle start time"] ?? r["date"] ?? r["day"] ?? r["Day"])?.slice(0, 10);
-    const question = r["Question text"] ?? r["question"] ?? r["Question"];
-    const answer = String(r["Answered yes"] ?? r["answer"] ?? r["Answer"] ?? "");
-    if (!day || !question) continue;
-    const id = `${day}|${question}`.toLowerCase().replace(/\s+/g, "_").slice(0, 200);
-    const { error } = await sb.from("whoop_journal").upsert({ id, day, question, answer, raw: r });
-    if (error) errors.push(error.message);
-    else inserted++;
-  }
-  return { inserted, errors };
-}
-
-async function processRaw(rows: any[], filename: string, sb: ReturnType<typeof sbAdmin>): Promise<{ inserted: number; errors: string[] }> {
-  const errors: string[] = [];
   const BATCH = 500;
-  let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = rows.slice(i, i + BATCH).map((row, j) => ({ filename, row_index: i + j, row }));
     const { error, count } = await sb.from("whoop_import_raw").insert(chunk, { count: "exact" });
@@ -105,17 +122,11 @@ export async function POST(req: NextRequest) {
     const rows = parsed.data.filter((r) => Object.values(r).some((v) => v !== "" && v != null));
 
     let proc: { inserted: number; errors: string[] };
-    if (detected === "hr_samples") proc = await processHrSamples(rows, sb);
-    else if (detected === "journal") proc = await processJournal(rows, sb);
+    if (detected === "journal") proc = await processJournal(rows, sb);
+    else if (detected === "hr_samples") proc = await processHrSamples(rows, sb);
     else proc = await processRaw(rows, file.name, sb);
 
-    results.push({
-      filename: file.name,
-      detected,
-      rows: rows.length,
-      inserted: proc.inserted,
-      errors: proc.errors.slice(0, 5),
-    });
+    results.push({ filename: file.name, detected, rows: rows.length, inserted: proc.inserted, errors: proc.errors.slice(0, 5) });
   }
 
   return NextResponse.json({ ok: true, results });

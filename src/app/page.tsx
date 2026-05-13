@@ -11,11 +11,12 @@ export default async function Home() {
   const token = await loadToken().catch(() => null);
   const sb = sbAdmin();
 
-  const [{ data: rec }, { data: slp }, { data: cyc }, { data: wrk }, { data: profile }] = await Promise.all([
+  const [{ data: rec }, { data: slp }, { data: cyc }, { data: wrk }, { data: jrn }, { data: profile }] = await Promise.all([
     sb.from("whoop_recovery").select("created_at_ts, recovery_score, hrv_rmssd_milli, resting_heart_rate, spo2_percentage, skin_temp_celsius").order("created_at_ts", { ascending: true }).limit(2000),
     sb.from("whoop_sleep").select("start_ts, nap, sleep_performance_percentage, sleep_efficiency_percentage, sleep_consistency_percentage, total_in_bed_milli, total_rem_sleep_milli, total_slow_wave_sleep_milli, total_light_sleep_milli, total_awake_milli, disturbance_count, respiratory_rate").order("start_ts", { ascending: true }).limit(2000),
     sb.from("whoop_cycle").select("start_ts, strain, average_heart_rate, max_heart_rate, kilojoule, synced_at").order("start_ts", { ascending: true }).limit(2000),
     sb.from("whoop_workout").select("start_ts, end_ts, sport_id, strain, kilojoule, average_heart_rate, max_heart_rate, zone_zero_milli, zone_one_milli, zone_two_milli, zone_three_milli, zone_four_milli, zone_five_milli").order("start_ts", { ascending: true }).limit(2000),
+    sb.from("whoop_journal").select("day, question, answer").order("day", { ascending: false }).limit(10000),
     sb.from("whoop_profile").select("updated_at").limit(1).maybeSingle(),
   ]);
 
@@ -115,6 +116,7 @@ export default async function Home() {
           sleep={sleep}
           strain={strain}
           workouts={workouts}
+          journal={(jrn ?? []) as any}
           lastSync={lastSync}
         />
       )}

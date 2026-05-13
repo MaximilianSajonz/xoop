@@ -37,6 +37,7 @@ export type Sleep = {
   nap: boolean;
 };
 export type Strain = { day: string; strain: number | null; avg_hr: number | null; max_hr: number | null; kj: number | null };
+export type Journal = { day: string; question: string; answer: string };
 export type Workout = {
   day: string;
   start_ts: string;
@@ -58,7 +59,7 @@ const RANGES = [
   { label: "All", days: 9999 },
 ];
 
-const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Analyse", "Compare", "Insights", "Correlations"] as const;
+const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Analyse", "Behaviors", "Compare", "Insights", "Correlations"] as const;
 type Tab = typeof TABS[number];
 
 const TOOLTIP_STYLE = { background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 8, fontSize: 12 } as const;
@@ -68,12 +69,14 @@ export default function Dashboard({
   sleep,
   strain,
   workouts,
+  journal,
   lastSync,
 }: {
   recovery: Recovery[];
   sleep: Sleep[];
   strain: Strain[];
   workouts: Workout[];
+  journal: Journal[];
   lastSync: string | null;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
@@ -139,7 +142,8 @@ export default function Dashboard({
       {tab === "Sleep" && <SleepTab sleep={s} />}
       {tab === "Strain" && <StrainTab strain={st} />}
       {tab === "Workouts" && <WorkoutsTab workouts={w} />}
-      {tab === "Analyse" && <AnalyseTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} />}
+      {tab === "Analyse" && <AnalyseTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} journal={journal} />}
+      {tab === "Behaviors" && <BehaviorsTab journal={journal} recovery={recovery} sleep={sleep} strain={strain} />}
       {tab === "Compare" && <CompareTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} />}
       {tab === "Insights" && <InsightsTab workouts={w} recovery={r} />}
       {tab === "Correlations" && <CorrelationsTab recovery={r} sleep={s} strain={st} />}
@@ -1393,11 +1397,13 @@ function AnalyseTab({
   sleep,
   strain,
   workouts,
+  journal,
 }: {
   recovery: Recovery[];
   sleep: Sleep[];
   strain: Strain[];
   workouts: Workout[];
+  journal: Journal[];
 }) {
   const allDays = useMemo(() => {
     const s = new Set<string>();
@@ -1418,6 +1424,8 @@ function AnalyseTab({
   const slpDay = sleep.filter((x) => x.day === day);
   const cyc = strain.find((x) => x.day === day);
   const wkts = workouts.filter((x) => x.day === day);
+  const journalDay = journal.filter((j) => j.day === day);
+  const yesBehaviors = journalDay.filter((j) => j.answer === "true").map((j) => j.question.replace(/\?$/, ""));
 
   // 7-day surrounding context for mini sparkline-ish chart
   const recIdx = recovery.findIndex((x) => x.day === day);
@@ -1545,6 +1553,19 @@ function AnalyseTab({
         )}
       </Card>
 
+      {yesBehaviors.length > 0 && (
+        <Card>
+          <h3 className="mb-3 text-lg font-semibold">Behaviors logged</h3>
+          <div className="flex flex-wrap gap-2">
+            {yesBehaviors.map((b, i) => (
+              <span key={i} className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
+                {b}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card>
         <h3 className="mb-3 text-lg font-semibold">Workouts ({wkts.length})</h3>
         {!wkts.length ? (
@@ -1589,6 +1610,173 @@ function AnalyseTab({
           </LineChart>
         </ResponsiveContainer>
       </Card>
+    </div>
+  );
+}
+
+// ---------- Behaviors tab ----------
+
+function BehaviorsTab({
+  journal,
+  recovery,
+  sleep,
+  strain,
+}: {
+  journal: Journal[];
+  recovery: Recovery[];
+  sleep: Sleep[];
+  strain: Strain[];
+}) {
+  const recByDay = useMemo(() => new Map(recovery.map((r) => [r.day, r])), [recovery]);
+  const slpByDay = useMemo(() => new Map(sleep.filter((s) => !s.nap).map((s) => [s.day, s])), [sleep]);
+  const strByDay = useMemo(() => new Map(strain.map((s) => [s.day, s])), [strain]);
+
+  // group journal by question
+  const byQuestion = useMemo(() => {
+    const m = new Map<string, { yes: string[]; no: string[] }>();
+    for (const j of journal) {
+      if (!m.has(j.question)) m.set(j.question, { yes: [], no: [] });
+      const e = m.get(j.question)!;
+      if (j.answer === "true") e.yes.push(j.day);
+      else if (j.answer === "false") e.no.push(j.day);
+    }
+    return m;
+  }, [journal]);
+
+  const overallRec = avg(recovery.map((r) => r.recovery_score));
+  const overallHrv = avg(recovery.map((r) => r.hrv));
+  const overallSleep = avg([...slpByDay.values()].map((s) => s.performance));
+  const overallStrain = avg(strain.map((s) => s.strain));
+
+  const rows = useMemo(() => {
+    const result = [];
+    for (const [question, { yes, no }] of byQuestion.entries()) {
+      const recYes = avg(yes.map((d) => recByDay.get(d)?.recovery_score));
+      const recNo = avg(no.map((d) => recByDay.get(d)?.recovery_score));
+      const hrvYes = avg(yes.map((d) => recByDay.get(d)?.hrv));
+      const slpYes = avg(yes.map((d) => slpByDay.get(d)?.performance));
+      const strYes = avg(yes.map((d) => strByDay.get(d)?.strain));
+      const deltaRec = recYes != null && recNo != null ? recYes - recNo : null;
+      result.push({
+        question,
+        yesCount: yes.length,
+        noCount: no.length,
+        recYes,
+        recNo,
+        deltaRec,
+        hrvYes,
+        slpYes,
+        strYes,
+      });
+    }
+    return result
+      .filter((r) => r.yesCount >= 2)
+      .sort((a, b) => (Math.abs(b.deltaRec ?? 0) - Math.abs(a.deltaRec ?? 0)));
+  }, [byQuestion, recByDay, slpByDay, strByDay]);
+
+  if (!journal.length) {
+    return (
+      <Card>
+        <h2 className="mb-3 text-lg font-semibold">No journal data yet</h2>
+        <p className="text-sm text-neutral-400 mb-2">
+          Drop your <code className="text-emerald-300">journal_entries.csv</code> at the <a href="/import" className="text-emerald-400 underline">Import</a> page.
+        </p>
+        <p className="text-xs text-neutral-500">
+          Get the export from the Whoop app: <em>More → App Settings → Integrations → Data Export</em>.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <h2 className="mb-2 text-lg font-semibold">Behavior impact</h2>
+        <p className="text-sm text-neutral-400">
+          For each question you've answered, average recovery on YES days vs NO days, plus HRV / sleep / strain on YES days. Sorted by absolute recovery impact. Behaviors with fewer than 2 YES days are hidden.
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Overall baselines — recovery: <span className="text-white">{fmt(overallRec, 0)}%</span> · HRV: <span className="text-white">{fmt(overallHrv, 1)} ms</span> · sleep perf: <span className="text-white">{fmt(overallSleep, 0)}%</span> · strain: <span className="text-white">{fmt(overallStrain, 1)}</span>
+        </p>
+      </Card>
+
+      <Card className="overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead className="bg-neutral-900/60 text-neutral-400">
+            <tr>
+              <th className="p-3 text-left font-medium">Behavior</th>
+              <th className="p-3 text-right font-medium">Yes n</th>
+              <th className="p-3 text-right font-medium">Rec ✓</th>
+              <th className="p-3 text-right font-medium">Rec ✗</th>
+              <th className="p-3 text-right font-medium">Δ Rec</th>
+              <th className="p-3 text-right font-medium">HRV ✓</th>
+              <th className="p-3 text-right font-medium">Sleep ✓</th>
+              <th className="p-3 text-right font-medium">Strain ✓</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const sign = r.deltaRec == null ? "" : r.deltaRec > 0 ? "+" : "";
+              const color =
+                r.deltaRec == null ? "text-neutral-500"
+                : r.deltaRec >= 5 ? "text-emerald-300"
+                : r.deltaRec >= 2 ? "text-emerald-400/80"
+                : r.deltaRec <= -5 ? "text-red-300"
+                : r.deltaRec <= -2 ? "text-red-400/80"
+                : "text-neutral-400";
+              return (
+                <tr key={r.question} className="border-t border-neutral-900 transition hover:bg-neutral-900/40">
+                  <td className="p-3 font-medium">{r.question.replace(/\?$/, "")}</td>
+                  <td className="p-3 text-right text-neutral-400">{r.yesCount} / {r.yesCount + r.noCount}</td>
+                  <td className="p-3 text-right">{fmt(r.recYes, 0)}%</td>
+                  <td className="p-3 text-right text-neutral-500">{fmt(r.recNo, 0)}%</td>
+                  <td className={`p-3 text-right font-semibold tabular-nums ${color}`}>
+                    {r.deltaRec == null ? "—" : `${sign}${r.deltaRec.toFixed(1)}`}
+                  </td>
+                  <td className="p-3 text-right text-blue-300">{fmt(r.hrvYes, 1)}</td>
+                  <td className="p-3 text-right text-violet-300">{fmt(r.slpYes, 0)}%</td>
+                  <td className="p-3 text-right text-amber-300">{fmt(r.strYes, 1)}</td>
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr><td colSpan={8} className="p-4 text-center text-neutral-500">Not enough YES days yet (need ≥2 per behavior).</td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+
+      <Section title="Tagged behaviors per day" subtitle="last 30 logged days">
+        <Card>
+          <div className="space-y-2 max-h-[600px] overflow-auto">
+            {(() => {
+              const byDay = new Map<string, string[]>();
+              for (const j of journal) {
+                if (j.answer !== "true") continue;
+                const arr = byDay.get(j.day) ?? [];
+                arr.push(j.question.replace(/\?$/, ""));
+                byDay.set(j.day, arr);
+              }
+              const entries = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 30);
+              return entries.map(([day, qs]) => (
+                <div key={day} className="border-b border-neutral-900 pb-2 last:border-0">
+                  <div className="mb-1 flex items-baseline justify-between">
+                    <span className="text-sm font-medium">{day}</span>
+                    <span className="text-xs text-neutral-500">recovery {recByDay.get(day)?.recovery_score ?? "—"}%</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {qs.map((q, i) => (
+                      <span key={i} className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-0.5 text-xs text-violet-200">
+                        {q}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        </Card>
+      </Section>
     </div>
   );
 }
