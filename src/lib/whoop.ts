@@ -94,12 +94,12 @@ async function paginate<T>(p: string, start?: string, end?: string): Promise<T[]
 }
 
 export const whoop = {
-  profile: () => api<any>("/v1/user/profile/basic"),
-  bodyMeasurement: () => api<any>("/v1/user/measurement/body"),
-  cycles: (start?: string, end?: string) => paginate<any>("/v1/cycle", start, end),
-  recovery: (start?: string, end?: string) => paginate<any>("/v1/recovery", start, end),
-  sleep: (start?: string, end?: string) => paginate<any>("/v1/activity/sleep", start, end),
-  workouts: (start?: string, end?: string) => paginate<any>("/v1/activity/workout", start, end),
+  profile: () => api<any>("/v2/user/profile/basic"),
+  bodyMeasurement: () => api<any>("/v2/user/measurement/body"),
+  cycles: (start?: string, end?: string) => paginate<any>("/v2/cycle", start, end),
+  recovery: (start?: string, end?: string) => paginate<any>("/v2/recovery", start, end),
+  sleep: (start?: string, end?: string) => paginate<any>("/v2/activity/sleep", start, end),
+  workouts: (start?: string, end?: string) => paginate<any>("/v2/activity/workout", start, end),
 };
 
 export async function exchangeCode(code: string) {

@@ -3,7 +3,7 @@ import { sbAdmin } from "@/lib/supabase";
 import { whoop } from "@/lib/whoop";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const days = Number(req.nextUrl.searchParams.get("days") ?? 30);

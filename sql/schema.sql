@@ -1,4 +1,4 @@
--- xoop schema — Whoop data mirror
+-- xoop schema — Whoop data mirror (API v2)
 -- run in Supabase SQL editor
 
 create table if not exists whoop_tokens (
@@ -10,7 +10,7 @@ create table if not exists whoop_tokens (
 );
 
 create table if not exists whoop_profile (
-  user_id bigint primary key,
+  user_id text primary key,
   email text,
   first_name text,
   last_name text,
@@ -21,8 +21,8 @@ create table if not exists whoop_profile (
 );
 
 create table if not exists whoop_cycle (
-  id bigint primary key,
-  user_id bigint not null,
+  id text primary key,
+  user_id text not null,
   start_ts timestamptz not null,
   end_ts timestamptz,
   timezone_offset text,
@@ -36,9 +36,9 @@ create table if not exists whoop_cycle (
 );
 
 create table if not exists whoop_recovery (
-  cycle_id bigint primary key,
-  user_id bigint not null,
-  sleep_id bigint,
+  cycle_id text primary key,
+  user_id text not null,
+  sleep_id text,
   created_at_ts timestamptz,
   score_state text,
   user_calibrating boolean,
@@ -52,8 +52,8 @@ create table if not exists whoop_recovery (
 );
 
 create table if not exists whoop_sleep (
-  id bigint primary key,
-  user_id bigint not null,
+  id text primary key,
+  user_id text not null,
   start_ts timestamptz not null,
   end_ts timestamptz,
   nap boolean,
@@ -73,8 +73,8 @@ create table if not exists whoop_sleep (
 );
 
 create table if not exists whoop_workout (
-  id bigint primary key,
-  user_id bigint not null,
+  id text primary key,
+  user_id text not null,
   start_ts timestamptz not null,
   end_ts timestamptz,
   sport_id int,
