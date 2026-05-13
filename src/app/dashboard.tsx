@@ -291,9 +291,38 @@ function RecoveryTab({ recovery }: { recovery: Recovery[] }) {
         </Card>
       </Section>
 
-      <Section title="Recovery heatmap" subtitle="GitHub-style calendar — green = recovered, red = depleted">
+      <Section title="Recovery heatmap" subtitle="green = recovered, red = depleted · hover any cell">
         <Card>
-          <CalendarHeatmap data={recovery} />
+          <Heatmap
+            data={recovery.map((r) => ({ day: r.day, value: r.recovery_score }))}
+            colorFn={recoveryColor}
+            fmtValue={(v) => (v == null ? "no data" : `${v}%`)}
+            legend={RECOVERY_LEGEND}
+          />
+        </Card>
+      </Section>
+
+      <Section title="HRV heatmap" subtitle="brighter blue = higher HRV (better parasympathetic tone)">
+        <Card>
+          {(() => {
+            const vals = recovery.map((r) => r.hrv).filter((v): v is number => typeof v === "number");
+            const min = vals.length ? Math.min(...vals) : 0;
+            const max = vals.length ? Math.max(...vals) : 100;
+            return (
+              <Heatmap
+                data={recovery.map((r) => ({ day: r.day, value: r.hrv }))}
+                colorFn={(v) => hrvGradient(v, min, max)}
+                fmtValue={(v) => (v == null ? "no data" : `${v.toFixed(1)} ms`)}
+                legend={[
+                  { label: `${min.toFixed(0)}`, value: min },
+                  { label: "", value: min + (max - min) * 0.25 },
+                  { label: "", value: min + (max - min) * 0.5 },
+                  { label: "", value: min + (max - min) * 0.75 },
+                  { label: `${max.toFixed(0)} ms`, value: max },
+                ]}
+              />
+            );
+          })()}
         </Card>
       </Section>
 
@@ -348,20 +377,56 @@ function RecoveryTab({ recovery }: { recovery: Recovery[] }) {
 // ---------- Calendar heatmap ----------
 
 function recoveryColor(score: number | null | undefined): string {
-  if (score == null) return "#1a1a1a";
-  if (score >= 67) return `rgba(16, 185, 129, ${0.3 + (score - 67) / 100})`;
-  if (score >= 34) return `rgba(245, 158, 11, ${0.3 + (score - 34) / 100})`;
-  return `rgba(239, 68, 68, ${0.3 + (34 - score) / 100})`;
+  if (score == null) return "#161616";
+  if (score >= 67) return `rgba(16, 185, 129, ${0.35 + (score - 67) / 90})`;
+  if (score >= 34) return `rgba(245, 158, 11, ${0.35 + (score - 34) / 90})`;
+  return `rgba(239, 68, 68, ${0.4 + (34 - score) / 60})`;
 }
 
-function CalendarHeatmap({ data }: { data: Recovery[] }) {
-  const byDay = useMemo(() => new Map(data.map((d) => [d.day, d])), [data]);
+function intensityColor(rgb: [number, number, number]) {
+  return (v: number | null | undefined, min: number, max: number): string => {
+    if (v == null) return "#161616";
+    const t = Math.max(0, Math.min(1, (v - min) / (max - min)));
+    return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${0.25 + t * 0.75})`;
+  };
+}
+
+const sleepPerfColor = (v: number | null | undefined) => {
+  if (v == null) return "#161616";
+  if (v >= 85) return `rgba(16, 185, 129, ${0.4 + (v - 85) / 60})`;
+  if (v >= 70) return `rgba(245, 158, 11, ${0.4 + (v - 70) / 60})`;
+  return `rgba(239, 68, 68, ${0.4 + (70 - v) / 100})`;
+};
+
+const strainGradient = intensityColor([251, 191, 36]); // amber
+const hrvGradient = intensityColor([96, 165, 250]);    // blue
+const sleepHoursGradient = intensityColor([124, 58, 237]); // purple
+const workoutGradient = intensityColor([52, 211, 153]); // teal
+
+type HeatmapPoint = { day: string; value: number | null };
+
+function Heatmap({
+  data,
+  colorFn,
+  fmtValue = (v) => (v == null ? "no data" : String(v)),
+  legend,
+  cell = 14,
+  gap = 3,
+}: {
+  data: HeatmapPoint[];
+  colorFn: (v: number | null) => string;
+  fmtValue?: (v: number | null) => string;
+  legend?: { label: string; value: number | null }[];
+  cell?: number;
+  gap?: number;
+}) {
+  const byDay = useMemo(() => new Map(data.map((d) => [d.day, d.value])), [data]);
   if (!data.length) return <p className="text-sm text-neutral-500">No data.</p>;
 
-  const firstDay = new Date(data[0].day);
-  const lastDay = new Date(data[data.length - 1].day);
+  const sorted = [...data].sort((a, b) => a.day.localeCompare(b.day));
+  const firstDay = new Date(sorted[0].day);
+  const lastDay = new Date(sorted[sorted.length - 1].day);
 
-  // align to Monday of first week
   const start = new Date(firstDay);
   start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
   const end = new Date(lastDay);
@@ -380,52 +445,56 @@ function CalendarHeatmap({ data }: { data: Recovery[] }) {
   }
   if (week.length) weeks.push(week);
 
-  const monthLabels: { col: number; label: string }[] = [];
+  // month label markers: index into weeks where a new month starts in week's first day
+  const monthMarkers: { col: number; label: string }[] = [];
   let lastMonth = -1;
   weeks.forEach((w, i) => {
     const m = w[0].date.getMonth();
     if (m !== lastMonth) {
-      monthLabels.push({ col: i, label: w[0].date.toLocaleDateString("en-US", { month: "short" }) });
+      const label = w[0].date.toLocaleDateString("en-US", { month: "short" });
+      const yearSwitch = w[0].date.getMonth() === 0 ? ` ${w[0].date.getFullYear()}` : "";
+      monthMarkers.push({ col: i, label: label + yearSwitch });
       lastMonth = m;
     }
   });
 
+  const colWidth = cell + gap;
   const weekdayLabels = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
+  const labelWidth = 32;
+  const gridWidth = weeks.length * colWidth;
 
   return (
     <div className="overflow-x-auto">
-      <div className="inline-block min-w-full">
-        <div className="ml-8 flex text-[10px] text-neutral-500" style={{ gap: 3 }}>
-          {monthLabels.map((m, i) => {
-            const prev = i === 0 ? 0 : monthLabels[i - 1].col;
-            const span = m.col - prev;
-            return (
-              <span key={i} style={{ width: span * 15 }}>
-                {i === 0 ? "" : m.label}
-              </span>
-            );
-          })}
+      <div className="inline-block">
+        <div className="relative h-4 text-[10px] text-neutral-400" style={{ marginLeft: labelWidth, width: gridWidth }}>
+          {monthMarkers.map((m, i) => (
+            <span key={i} className="absolute top-0" style={{ left: m.col * colWidth }}>
+              {m.label}
+            </span>
+          ))}
         </div>
-        <div className="flex" style={{ gap: 3 }}>
-          <div className="flex flex-col text-[10px] text-neutral-500" style={{ gap: 3, marginTop: 0, width: 28 }}>
+        <div className="flex" style={{ gap }}>
+          <div className="flex flex-col text-[10px] text-neutral-500" style={{ gap, width: labelWidth }}>
             {weekdayLabels.map((d, i) => (
-              <div key={i} style={{ height: 12, lineHeight: "12px" }}>{d}</div>
+              <div key={i} style={{ height: cell, lineHeight: `${cell}px` }}>{d}</div>
             ))}
           </div>
-          <div className="flex" style={{ gap: 3 }}>
+          <div className="flex" style={{ gap }}>
             {weeks.map((w, i) => (
-              <div key={i} className="flex flex-col" style={{ gap: 3 }}>
+              <div key={i} className="flex flex-col" style={{ gap }}>
                 {w.map((d) => {
-                  const r = byDay.get(d.dayStr);
+                  const v = byDay.get(d.dayStr) ?? null;
+                  const isFuture = d.date.getTime() > Date.now();
                   return (
                     <div
                       key={d.dayStr}
-                      title={`${d.dayStr} — ${r?.recovery_score != null ? r.recovery_score + "%" : "no data"}`}
+                      title={`${d.dayStr} — ${isFuture ? "—" : fmtValue(v)}`}
+                      className="transition-transform hover:scale-150 hover:ring-1 hover:ring-white/40 hover:z-10 relative"
                       style={{
-                        width: 12,
-                        height: 12,
-                        borderRadius: 2,
-                        background: recoveryColor(r?.recovery_score),
+                        width: cell,
+                        height: cell,
+                        borderRadius: 3,
+                        background: isFuture ? "transparent" : colorFn(v),
                       }}
                     />
                   );
@@ -434,17 +503,27 @@ function CalendarHeatmap({ data }: { data: Recovery[] }) {
             ))}
           </div>
         </div>
-        <div className="mt-3 ml-8 flex items-center gap-2 text-[10px] text-neutral-500">
-          <span>Less</span>
-          {[10, 30, 50, 70, 90].map((v) => (
-            <div key={v} style={{ width: 12, height: 12, borderRadius: 2, background: recoveryColor(v) }} />
-          ))}
-          <span>More</span>
-        </div>
+        {legend && (
+          <div className="mt-3 flex items-center gap-2 text-[10px] text-neutral-500" style={{ marginLeft: labelWidth }}>
+            <span>{legend[0]?.label}</span>
+            {legend.map((l, i) => (
+              <div key={i} style={{ width: cell, height: cell, borderRadius: 3, background: colorFn(l.value) }} />
+            ))}
+            <span>{legend[legend.length - 1]?.label}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+const RECOVERY_LEGEND = [
+  { label: "Low", value: 10 },
+  { label: "", value: 30 },
+  { label: "", value: 50 },
+  { label: "", value: 70 },
+  { label: "High", value: 90 },
+];
 
 // ---------- Distribution histogram ----------
 
@@ -534,6 +613,40 @@ function SleepTab({ sleep }: { sleep: Sleep[] }) {
         <Stat label="Resp rate" value={fmt(stats.rr, 1)} />
       </section>
 
+      <Section title="Sleep performance heatmap" subtitle="green ≥85% · yellow ≥70% · red below">
+        <Card>
+          <Heatmap
+            data={nonNap.map((s) => ({ day: s.day, value: s.performance }))}
+            colorFn={sleepPerfColor}
+            fmtValue={(v) => (v == null ? "no data" : `${v}%`)}
+            legend={[
+              { label: "Low", value: 40 },
+              { label: "", value: 60 },
+              { label: "", value: 75 },
+              { label: "", value: 85 },
+              { label: "High", value: 95 },
+            ]}
+          />
+        </Card>
+      </Section>
+
+      <Section title="Hours in bed heatmap" subtitle="deeper purple = longer night">
+        <Card>
+          <Heatmap
+            data={nonNap.map((s) => ({ day: s.day, value: s.hours_in_bed }))}
+            colorFn={(v) => sleepHoursGradient(v, 4, 10)}
+            fmtValue={(v) => (v == null ? "no data" : `${v.toFixed(1)} h`)}
+            legend={[
+              { label: "4h", value: 4 },
+              { label: "", value: 6 },
+              { label: "", value: 7.5 },
+              { label: "", value: 9 },
+              { label: "10h+", value: 10 },
+            ]}
+          />
+        </Card>
+      </Section>
+
       <Section title="Sleep stages">
         <Card>
           <ResponsiveContainer width="100%" height={280}>
@@ -620,6 +733,23 @@ function StrainTab({ strain }: { strain: Strain[] }) {
         <Stat label="Total kJ" value={fmt(stats.totalKj, 0)} />
       </section>
 
+      <Section title="Strain heatmap" subtitle="amber intensity scales with strain (0–21)">
+        <Card>
+          <Heatmap
+            data={strain.map((s) => ({ day: s.day, value: s.strain }))}
+            colorFn={(v) => strainGradient(v, 0, 21)}
+            fmtValue={(v) => (v == null ? "no data" : v.toFixed(1))}
+            legend={[
+              { label: "Easy", value: 4 },
+              { label: "", value: 8 },
+              { label: "", value: 12 },
+              { label: "", value: 16 },
+              { label: "All out", value: 20 },
+            ]}
+          />
+        </Card>
+      </Section>
+
       <Section title="Daily strain">
         <Card>
           <ResponsiveContainer width="100%" height={280}>
@@ -679,6 +809,27 @@ function WorkoutsTab({ workouts }: { workouts: Workout[] }) {
         <Stat label="Avg strain" value={fmt(avg(workouts.map((x) => x.strain)), 1)} />
         <Stat label="Sports" value={String(bySport.length)} />
       </section>
+
+      <Section title="Workout minutes heatmap" subtitle="how much you moved each day">
+        <Card>
+          <Heatmap
+            data={(() => {
+              const m = new Map<string, number>();
+              for (const w of workouts) m.set(w.day, (m.get(w.day) ?? 0) + w.minutes);
+              return [...m.entries()].map(([day, value]) => ({ day, value }));
+            })()}
+            colorFn={(v) => workoutGradient(v, 0, 120)}
+            fmtValue={(v) => (v == null ? "—" : `${v} min`)}
+            legend={[
+              { label: "0", value: 0 },
+              { label: "", value: 30 },
+              { label: "", value: 60 },
+              { label: "", value: 90 },
+              { label: "2h+", value: 120 },
+            ]}
+          />
+        </Card>
+      </Section>
 
       <Section title="Time by sport">
         <Card>
