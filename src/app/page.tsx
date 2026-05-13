@@ -84,13 +84,16 @@ export default async function Home() {
           <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white via-emerald-200 to-emerald-400 bg-clip-text text-transparent">xoop</h1>
           <p className="text-xs text-neutral-500">your whoop, your data, your way</p>
         </div>
-        {token ? (
-          <SyncButton />
-        ) : (
-          <a className="rounded bg-white px-4 py-2 text-sm font-medium text-black" href="/api/auth/start">
-            Connect Whoop
-          </a>
-        )}
+        <div className="flex items-center gap-3">
+          <a href="/import" className="rounded border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-900">Import CSV</a>
+          {token ? (
+            <SyncButton />
+          ) : (
+            <a className="rounded bg-white px-4 py-2 text-sm font-medium text-black" href="/api/auth/start">
+              Connect Whoop
+            </a>
+          )}
+        </div>
       </header>
 
       {!token ? (

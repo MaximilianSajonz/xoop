@@ -1,6 +1,36 @@
 -- xoop schema — Whoop data mirror (API v2)
 -- run in Supabase SQL editor
 
+-- High-resolution heart rate samples from Whoop data export
+create table if not exists whoop_hr_sample (
+  ts timestamptz primary key,
+  bpm int not null,
+  source text default 'export'
+);
+create index if not exists whoop_hr_sample_ts_idx on whoop_hr_sample (ts);
+
+-- Journal entries from Whoop app (behaviors logged each morning)
+create table if not exists whoop_journal (
+  id text primary key,
+  day date not null,
+  question text not null,
+  answer text,
+  raw jsonb,
+  imported_at timestamptz default now()
+);
+create index if not exists whoop_journal_day_idx on whoop_journal (day);
+create index if not exists whoop_journal_question_idx on whoop_journal (question);
+
+-- Generic landing zone for unknown CSVs from imports
+create table if not exists whoop_import_raw (
+  id uuid primary key default gen_random_uuid(),
+  filename text not null,
+  row_index int not null,
+  row jsonb not null,
+  imported_at timestamptz default now()
+);
+create index if not exists whoop_import_raw_filename_idx on whoop_import_raw (filename);
+
 create table if not exists whoop_annotation (
   id uuid primary key default gen_random_uuid(),
   day date not null,
