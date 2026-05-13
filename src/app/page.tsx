@@ -57,6 +57,8 @@ export default async function Home() {
     const endMs = w.end_ts ? new Date(w.end_ts).getTime() : startMs;
     return {
       day: (w.start_ts ?? "").slice(0, 10),
+      start_ts: w.start_ts,
+      end_ts: w.end_ts,
       sport_id: w.sport_id,
       strain: w.strain,
       kj: w.kilojoule,

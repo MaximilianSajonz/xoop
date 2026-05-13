@@ -19,6 +19,7 @@ import {
 } from "recharts";
 import { avg, fmt, pearson, rollingAvg, pctDelta } from "@/lib/stats";
 import { sportName } from "@/lib/sports";
+import { detectIntimacy, detectLateNight, detectMystery, detectRecoveryCliffs, detectHrvCrashes } from "@/lib/insights";
 
 export type Recovery = { day: string; recovery_score: number | null; hrv: number | null; rhr: number | null; spo2: number | null; skin_temp: number | null };
 export type Sleep = {
@@ -36,7 +37,7 @@ export type Sleep = {
   nap: boolean;
 };
 export type Strain = { day: string; strain: number | null; avg_hr: number | null; max_hr: number | null; kj: number | null };
-export type Workout = { day: string; sport_id: number | null; strain: number | null; kj: number | null; minutes: number; avg_hr: number | null; max_hr: number | null };
+export type Workout = { day: string; start_ts: string; end_ts: string | null; sport_id: number | null; strain: number | null; kj: number | null; minutes: number; avg_hr: number | null; max_hr: number | null };
 export type Annotation = { id: string; day: string; tag: string; value: number | null; note: string | null; created_at: string };
 
 const RANGES = [
@@ -47,7 +48,7 @@ const RANGES = [
   { label: "All", days: 9999 },
 ];
 
-const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Correlations", "Annotations"] as const;
+const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Insights", "Correlations", "Annotations"] as const;
 type Tab = typeof TABS[number];
 
 const PRESET_TAGS = [
@@ -154,6 +155,7 @@ export default function Dashboard({
       {tab === "Sleep" && <SleepTab sleep={s} />}
       {tab === "Strain" && <StrainTab strain={st} />}
       {tab === "Workouts" && <WorkoutsTab workouts={w} />}
+      {tab === "Insights" && <InsightsTab workouts={w} recovery={r} />}
       {tab === "Correlations" && <CorrelationsTab recovery={r} sleep={s} strain={st} />}
       {tab === "Annotations" && (
         <AnnotationsTab
@@ -704,21 +706,202 @@ function CorrelationsTab({ recovery, sleep, strain }: { recovery: Recovery[]; sl
 
   return (
     <div className="space-y-8">
-      <p className="text-sm text-neutral-400">Pearson correlation — closer to +1 means strong positive, −1 strong negative. Below ~0.2 is noise.</p>
+      <Card className="text-sm text-neutral-300 space-y-2">
+        <p><strong className="text-white">How to read these.</strong> Each dot is one day. The number <code className="text-emerald-300">r</code> is Pearson correlation — how tightly the two metrics move together.</p>
+        <ul className="ml-5 list-disc space-y-1 text-neutral-400">
+          <li><span className="text-emerald-300">+1.0</span> = perfect positive (when X goes up, Y always goes up)</li>
+          <li><span className="text-emerald-300">+0.5 to +0.7</span> = strong, clearly visible trend</li>
+          <li><span className="text-amber-300">+0.3 to +0.5</span> = moderate, real but noisy</li>
+          <li><span className="text-neutral-500">−0.15 to +0.15</span> = basically noise, no relationship</li>
+          <li><span className="text-red-300">negative</span> = inverse (more X, less Y)</li>
+        </ul>
+        <p className="text-neutral-500">Correlation ≠ causation. A strong link is a hypothesis to investigate, not proof.</p>
+      </Card>
 
-      <ScatterCard title="Sleep performance → next-day recovery" xLabel="Sleep perf %" yLabel="Recovery %" data={sleepVsRecovery} corr={corr1} />
-      <ScatterCard title="Day-before strain → recovery" xLabel="Strain" yLabel="Recovery %" data={strainVsRecovery} corr={corr2} />
-      <ScatterCard title="Time in bed → next-day HRV" xLabel="Hours in bed" yLabel="HRV (ms)" data={sleepVsHrv} corr={corr3} />
+      <ScatterCard
+        title="Sleep performance → next-day recovery"
+        xLabel="Sleep perf % (yesterday)"
+        yLabel="Recovery % (today)"
+        data={sleepVsRecovery}
+        corr={corr1}
+        interpret={(c) =>
+          c == null ? "Not enough overlap to compute."
+          : c >= 0.4 ? "Strong: nights you sleep well clearly translate into better recovery the next day. Prioritize sleep quality."
+          : c >= 0.2 ? "Moderate link: sleep helps recovery, but other factors (strain, stress, illness) matter too."
+          : c > -0.1 ? "Weak: sleep performance doesn't predict next-day recovery much in your data. Maybe the score is too coarse, or other variables dominate."
+          : "Negative trend — unusual. Could be a data quirk or compensatory behavior (over-sleeping after rough days)."
+        }
+      />
+
+      <ScatterCard
+        title="Day-before strain → recovery"
+        xLabel="Strain (yesterday)"
+        yLabel="Recovery % (today)"
+        data={strainVsRecovery}
+        corr={corr2}
+        interpret={(c) =>
+          c == null ? "Not enough overlap to compute."
+          : c <= -0.3 ? "Clear inverse: high-strain days reliably tank next-day recovery. Plan recovery after big efforts."
+          : c <= -0.1 ? "Mild inverse: strain costs you some recovery, but you bounce back well most days."
+          : c > 0.2 ? "Counter-intuitive positive — possibly because rest days correlate with non-training stressors."
+          : "Essentially flat: your body handles strain without much overnight cost in this range."
+        }
+      />
+
+      <ScatterCard
+        title="Time in bed → next-day HRV"
+        xLabel="Hours in bed (yesterday)"
+        yLabel="HRV ms (today)"
+        data={sleepVsHrv}
+        corr={corr3}
+        interpret={(c) =>
+          c == null ? "Not enough overlap to compute."
+          : c >= 0.3 ? "Sleep duration meaningfully boosts your HRV. Longer nights → calmer nervous system."
+          : c >= 0.1 ? "Mild positive: more sleep helps HRV a little, but quality probably matters more than raw hours."
+          : "Flat: raw hours in bed doesn't move your HRV much. Look at consistency / sleep stages instead."
+        }
+      />
     </div>
   );
 }
 
-function ScatterCard({ title, xLabel, yLabel, data, corr }: {
+// ---------- Insights ----------
+
+function InsightsTab({ workouts, recovery }: { workouts: Workout[]; recovery: Recovery[] }) {
+  const intimacy = useMemo(() => detectIntimacy(workouts), [workouts]);
+  const lateNight = useMemo(() => detectLateNight(workouts), [workouts]);
+  const mystery = useMemo(() => detectMystery(workouts), [workouts]);
+  const cliffs = useMemo(() => detectRecoveryCliffs(recovery), [recovery]);
+  const hrvCrashes = useMemo(() => detectHrvCrashes(recovery), [recovery]);
+
+  return (
+    <div className="space-y-8">
+      <Card className="text-sm text-neutral-300 space-y-2">
+        <p><strong className="text-white">Auto-detected activities.</strong> These are pattern matches from your raw workouts — not confirmed events. The app looks at duration, time-of-day, sport type, HR, and proximity to other sessions.</p>
+        <p className="text-neutral-500">Higher confidence = more signals matched. Always investigate before treating as truth.</p>
+      </Card>
+
+      <Section title={`🍑 Possible intimacy sessions (${intimacy.length})`} subtitle="short generic activities, evening/night, elevated HR, often paired">
+        <Card>
+          {intimacy.length ? (
+            <div className="max-h-96 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-neutral-900 text-neutral-400">
+                  <tr>
+                    <th className="p-2 text-left">Date</th>
+                    <th className="p-2 text-left">Time</th>
+                    <th className="p-2 text-right">Min</th>
+                    <th className="p-2 text-right">Avg HR</th>
+                    <th className="p-2 text-right">Strain</th>
+                    <th className="p-2 text-right">Conf</th>
+                    <th className="p-2 text-left">Signals</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {intimacy.map((x, i) => (
+                    <tr key={i} className="border-t border-neutral-800">
+                      <td className="p-2">{x.day}</td>
+                      <td className="p-2 text-neutral-400">{new Date(x.start_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td className="p-2 text-right">{x.minutes}</td>
+                      <td className="p-2 text-right">{x.avg_hr ?? "—"}</td>
+                      <td className="p-2 text-right">{fmt(x.strain, 1)}</td>
+                      <td className="p-2 text-right">
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${x.confidence >= 8 ? "bg-pink-500/30 text-pink-200" : x.confidence >= 6 ? "bg-violet-500/20 text-violet-300" : "bg-neutral-800 text-neutral-400"}`}>
+                          {x.confidence}/10
+                        </span>
+                      </td>
+                      <td className="p-2 text-xs text-neutral-500">{x.reasons.join(" · ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-sm text-neutral-500">No candidates in this range.</p>
+          )}
+        </Card>
+      </Section>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Section title={`🌙 Late-night activities (${lateNight.length})`} subtitle="started 22:00 – 05:00">
+          <Card className="max-h-80 overflow-auto">
+            <ul className="space-y-1 text-sm">
+              {lateNight.map((x, i) => (
+                <li key={i} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
+                  <span>
+                    <span className="text-neutral-300">{x.day}</span>
+                    <span className="ml-2 text-neutral-500">{new Date(x.start_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  </span>
+                  <span className="text-neutral-400">{x.sport_name} · {x.minutes}m · {fmt(x.strain, 1)}</span>
+                </li>
+              ))}
+              {!lateNight.length && <li className="text-neutral-500">None</li>}
+            </ul>
+          </Card>
+        </Section>
+
+        <Section title={`❓ Mystery activities (${mystery.length})`} subtitle="generic sport, elevated HR, ≥ 10 min">
+          <Card className="max-h-80 overflow-auto">
+            <ul className="space-y-1 text-sm">
+              {mystery.map((x, i) => (
+                <li key={i} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
+                  <span>
+                    <span className="text-neutral-300">{x.day}</span>
+                    <span className="ml-2 text-neutral-500">{new Date(x.start_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  </span>
+                  <span className="text-neutral-400">{x.minutes}m · {x.avg_hr ?? "—"} bpm</span>
+                </li>
+              ))}
+              {!mystery.length && <li className="text-neutral-500">None</li>}
+            </ul>
+          </Card>
+        </Section>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Section title={`🔻 Recovery cliffs (${cliffs.length})`} subtitle="drop of ≥25 points day-over-day">
+          <Card className="max-h-80 overflow-auto">
+            <ul className="space-y-1 text-sm">
+              {cliffs.map((c, i) => (
+                <li key={i} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
+                  <span className="text-neutral-300">{c.day}</span>
+                  <span className="text-red-400 font-medium">
+                    {c.prev}% → {c.recovery_score}% <span className="text-red-300">(−{c.drop})</span>
+                  </span>
+                </li>
+              ))}
+              {!cliffs.length && <li className="text-neutral-500">None — steady recovery 🎉</li>}
+            </ul>
+          </Card>
+        </Section>
+
+        <Section title={`💔 HRV crashes (${hrvCrashes.length})`} subtitle="≥25% below 7-day rolling baseline">
+          <Card className="max-h-80 overflow-auto">
+            <ul className="space-y-1 text-sm">
+              {hrvCrashes.map((h, i) => (
+                <li key={i} className="flex items-baseline justify-between border-b border-neutral-800 py-1">
+                  <span className="text-neutral-300">{h.day}</span>
+                  <span className="text-amber-400 font-medium">
+                    {fmt(h.hrv, 1)} ms (base {fmt(h.baseline, 1)}, −{h.pctDrop.toFixed(0)}%)
+                  </span>
+                </li>
+              ))}
+              {!hrvCrashes.length && <li className="text-neutral-500">None</li>}
+            </ul>
+          </Card>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function ScatterCard({ title, xLabel, yLabel, data, corr, interpret }: {
   title: string;
   xLabel: string;
   yLabel: string;
   data: { x: number; y: number; day: string }[];
   corr: number | null;
+  interpret?: (c: number | null) => string;
 }) {
   const strength =
     corr == null ? "—" :
@@ -729,6 +912,7 @@ function ScatterCard({ title, xLabel, yLabel, data, corr }: {
   return (
     <Section title={title} subtitle={`r = ${corr == null ? "—" : dir + Math.abs(corr).toFixed(2)} (${strength}, n=${data.length})`}>
       <Card>
+        {interpret && <p className="mb-3 text-sm text-neutral-300">{interpret(corr)}</p>}
         <ResponsiveContainer width="100%" height={300}>
           <ScatterChart>
             <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
