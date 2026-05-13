@@ -1,6 +1,14 @@
 -- xoop schema — Whoop data mirror
 -- run in Supabase SQL editor
 
+create table if not exists whoop_tokens (
+  id text primary key,
+  access_token text not null,
+  refresh_token text not null,
+  expires_at timestamptz not null,
+  updated_at timestamptz default now()
+);
+
 create table if not exists whoop_profile (
   user_id bigint primary key,
   email text,

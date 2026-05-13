@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { sbAdmin } from "./supabase";
 
-const TOKEN_PATH = path.resolve(".tokens.json");
 const API = "https://api.prod.whoop.com/developer";
 const TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
 
@@ -15,31 +13,42 @@ export const SCOPES = [
   "offline",
 ];
 
-export type Tokens = {
+type StoredToken = {
+  id: string;
   access_token: string;
   refresh_token: string;
-  expires_at: number;
+  expires_at: string;
 };
 
-export async function saveTokens(t: Omit<Tokens, "expires_at"> & { expires_in: number }) {
-  const tokens: Tokens = {
-    access_token: t.access_token,
-    refresh_token: t.refresh_token,
-    expires_at: Date.now() + t.expires_in * 1000 - 60_000,
-  };
-  await fs.writeFile(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-  return tokens;
+export async function loadToken(): Promise<StoredToken | null> {
+  const { data } = await sbAdmin()
+    .from("whoop_tokens")
+    .select("*")
+    .eq("id", "default")
+    .maybeSingle();
+  return (data as StoredToken | null) ?? null;
 }
 
-export async function loadTokens(): Promise<Tokens> {
-  const raw = await fs.readFile(TOKEN_PATH, "utf8");
-  return JSON.parse(raw);
+export async function saveToken(t: {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}) {
+  const expires_at = new Date(Date.now() + t.expires_in * 1000 - 60_000).toISOString();
+  await sbAdmin()
+    .from("whoop_tokens")
+    .upsert({
+      id: "default",
+      access_token: t.access_token,
+      refresh_token: t.refresh_token,
+      expires_at,
+    });
 }
 
-async function refresh(tokens: Tokens): Promise<Tokens> {
+async function refresh(refresh_token: string) {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
-    refresh_token: tokens.refresh_token,
+    refresh_token,
     client_id: process.env.WHOOP_CLIENT_ID!,
     client_secret: process.env.WHOOP_CLIENT_SECRET!,
     scope: SCOPES.join(" "),
@@ -51,12 +60,14 @@ async function refresh(tokens: Tokens): Promise<Tokens> {
   });
   if (!res.ok) throw new Error(`refresh failed: ${res.status} ${await res.text()}`);
   const json = await res.json();
-  return await saveTokens(json);
+  await saveToken(json);
+  return json.access_token as string;
 }
 
-export async function getAccessToken(): Promise<string> {
-  let t = await loadTokens();
-  if (Date.now() >= t.expires_at) t = await refresh(t);
+async function getAccessToken(): Promise<string> {
+  const t = await loadToken();
+  if (!t) throw new Error("no token — visit /api/auth/start");
+  if (Date.now() >= new Date(t.expires_at).getTime()) return refresh(t.refresh_token);
   return t.access_token;
 }
 
@@ -83,10 +94,28 @@ async function paginate<T>(p: string, start?: string, end?: string): Promise<T[]
 }
 
 export const whoop = {
-  profile: () => api<{ user_id: number; email: string; first_name: string; last_name: string }>("/v1/user/profile/basic"),
-  bodyMeasurement: () => api("/v1/user/measurement/body"),
+  profile: () => api<any>("/v1/user/profile/basic"),
+  bodyMeasurement: () => api<any>("/v1/user/measurement/body"),
   cycles: (start?: string, end?: string) => paginate<any>("/v1/cycle", start, end),
   recovery: (start?: string, end?: string) => paginate<any>("/v1/recovery", start, end),
   sleep: (start?: string, end?: string) => paginate<any>("/v1/activity/sleep", start, end),
   workouts: (start?: string, end?: string) => paginate<any>("/v1/activity/workout", start, end),
 };
+
+export async function exchangeCode(code: string) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    client_id: process.env.WHOOP_CLIENT_ID!,
+    client_secret: process.env.WHOOP_CLIENT_SECRET!,
+    redirect_uri: process.env.WHOOP_REDIRECT_URI!,
+  });
+  const res = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  await saveToken(json);
+}

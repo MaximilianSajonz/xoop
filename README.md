@@ -1,16 +1,14 @@
 # xoop
 
-Personal Whoop → Supabase data sync.
+Personal Whoop dashboard. Next.js + Supabase.
 
 ## Setup
 
-```bash
-pnpm install
-# fill SUPABASE_SERVICE_ROLE_KEY in .env
-# run sql/schema.sql in Supabase SQL editor
-pnpm auth      # OAuth — opens browser, saves .tokens.json
-pnpm sync 30   # sync last 30 days
-```
+1. `pnpm install`
+2. Run `sql/schema.sql` in the Supabase SQL editor.
+3. Put `SUPABASE_SERVICE_ROLE_KEY` into `.env.local` (Supabase dashboard → Project Settings → API).
+4. In the Whoop developer portal, set the redirect URI to `http://localhost:3000/api/auth/callback`.
+5. `pnpm dev` → open http://localhost:3000 → click **Connect Whoop** → then **Sync 30d**.
 
 ## Privacy policy
 
