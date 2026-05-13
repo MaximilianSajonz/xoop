@@ -78,18 +78,27 @@ export default async function Home() {
   const lastSync = profile?.updated_at ?? null;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 md:px-8 py-6 md:py-8 space-y-6">
-      <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white via-emerald-200 to-emerald-400 bg-clip-text text-transparent">xoop</h1>
-          <p className="text-xs text-neutral-500">your whoop, your data, your way</p>
+    <main className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-5 sm:py-8 space-y-6 fade-in">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-br from-white via-emerald-200 to-emerald-500 bg-clip-text text-transparent">xoop</h1>
+          <p className="hidden sm:block text-xs text-neutral-500">your whoop, your data, your way</p>
         </div>
-        <div className="flex items-center gap-3">
-          <a href="/import" className="rounded border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-900">Import CSV</a>
+        <div className="flex items-center gap-2">
+          <a
+            href="/import"
+            title="Import CSV"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-800 px-3 py-2 text-xs font-medium text-neutral-300 transition hover:border-neutral-700 hover:bg-neutral-900 hover:text-white"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1v8m0 0L4 6m3 3l3-3M1 11v1a1 1 0 001 1h10a1 1 0 001-1v-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="hidden sm:inline">Import</span>
+          </a>
           {token ? (
             <SyncButton />
           ) : (
-            <a className="rounded bg-white px-4 py-2 text-sm font-medium text-black" href="/api/auth/start">
+            <a className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition hover:bg-neutral-200" href="/api/auth/start">
               Connect Whoop
             </a>
           )}

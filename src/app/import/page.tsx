@@ -46,10 +46,10 @@ export default function ImportPage() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl p-6 md:p-8 space-y-6">
+    <main className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-5 sm:py-8 space-y-6 fade-in">
       <header className="flex items-baseline justify-between">
-        <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white via-emerald-200 to-emerald-400 bg-clip-text text-transparent">Import</h1>
-        <a href="/" className="text-sm text-neutral-400 hover:text-white">← back to dashboard</a>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-br from-white via-emerald-200 to-emerald-500 bg-clip-text text-transparent">Import</h1>
+        <a href="/" className="text-sm text-neutral-400 transition hover:text-white">← dashboard</a>
       </header>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-5 text-sm text-neutral-300 space-y-2">

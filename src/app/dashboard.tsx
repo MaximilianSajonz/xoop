@@ -92,40 +92,46 @@ export default function Dashboard({
 
   return (
     <div className="space-y-6">
-      <div className="sticky top-0 z-10 -mx-6 md:-mx-8 border-b border-neutral-900 bg-black/80 px-6 md:px-8 py-3 backdrop-blur">
-        <nav className="flex flex-wrap gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`rounded-md px-3 py-1.5 text-sm transition ${
-                tab === t ? "bg-white text-black font-medium" : "text-neutral-400 hover:bg-neutral-900 hover:text-white"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-          <div className="ml-auto flex items-center gap-2">
-            {lastSync && (
-              <span className="hidden md:inline text-xs text-neutral-500">
-                last sync {new Date(lastSync).toLocaleString()}
-              </span>
-            )}
-            {RANGES.map((opt) => (
+      <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 lg:-mx-8 border-b border-neutral-900/80 bg-black/70 px-4 sm:px-6 lg:px-8 py-2.5 backdrop-blur-xl">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <nav className="tabs-scroll -mx-1 flex gap-0.5 overflow-x-auto px-1">
+            {TABS.map((t) => (
               <button
-                key={opt.days}
-                onClick={() => setDays(opt.days)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  days === opt.days
-                    ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
-                    : "text-neutral-500 hover:text-white"
+                key={t}
+                onClick={() => setTab(t)}
+                className={`shrink-0 rounded-md px-3 py-1.5 text-sm transition ${
+                  tab === t
+                    ? "bg-white text-black font-medium shadow-lg shadow-white/5"
+                    : "text-neutral-400 hover:bg-neutral-900 hover:text-white"
                 }`}
               >
-                {opt.label}
+                {t}
               </button>
             ))}
+          </nav>
+          <div className="flex items-center justify-between gap-2 sm:justify-end">
+            {lastSync && (
+              <span className="hidden lg:inline text-[11px] text-neutral-600">
+                synced {new Date(lastSync).toLocaleDateString([], { month: "short", day: "numeric" })} {new Date(lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <div className="flex items-center gap-0.5 rounded-lg border border-neutral-800/80 bg-neutral-950/50 p-0.5">
+              {RANGES.map((opt) => (
+                <button
+                  key={opt.days}
+                  onClick={() => setDays(opt.days)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    days === opt.days
+                      ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
+                      : "text-neutral-500 hover:text-white"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </nav>
+        </div>
       </div>
 
       {tab === "Overview" && <Overview recovery={r} sleep={s} strain={st} workouts={w} />}
@@ -144,7 +150,11 @@ export default function Dashboard({
 // ---------- subcomponents ----------
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-neutral-800 bg-gradient-to-b from-neutral-900/50 to-neutral-900/20 p-4 ${className}`}>{children}</div>;
+  return (
+    <div className={`rounded-2xl border border-neutral-800/60 bg-gradient-to-br from-neutral-900/60 via-neutral-950/40 to-neutral-950/60 p-4 sm:p-5 backdrop-blur-sm transition hover:border-neutral-700/60 ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 function Stat({ label, value, suffix = "", trend }: { label: string; value: string; suffix?: string; trend?: number | null }) {
@@ -152,12 +162,12 @@ function Stat({ label, value, suffix = "", trend }: { label: string; value: stri
   const arrow = trend == null ? "" : trend > 0 ? "↗" : "↘";
   return (
     <Card>
-      <div className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</div>
-      <div className="mt-1 flex items-baseline gap-2">
-        <span className="text-2xl font-semibold">{value}</span>
-        <span className="text-base text-neutral-400">{suffix}</span>
+      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-neutral-500">{label}</div>
+      <div className="mt-2 flex items-baseline gap-1.5">
+        <span className="text-2xl sm:text-3xl font-semibold tabular-nums">{value}</span>
+        <span className="text-sm text-neutral-400">{suffix}</span>
         {trend != null && (
-          <span className={`ml-auto text-xs ${trendColor}`}>
+          <span className={`ml-auto text-xs font-medium ${trendColor}`}>
             {arrow} {Math.abs(trend).toFixed(1)}%
           </span>
         )}
@@ -168,9 +178,9 @@ function Stat({ label, value, suffix = "", trend }: { label: string; value: stri
 
 function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <section>
-      <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-lg font-semibold">{title}</h2>
+    <section className="fade-in">
+      <div className="mb-3 flex flex-col items-start justify-between gap-1 sm:flex-row sm:items-baseline">
+        <h2 className="text-lg sm:text-xl font-semibold tracking-tight">{title}</h2>
         {subtitle && <span className="text-xs text-neutral-500">{subtitle}</span>}
       </div>
       {children}
@@ -1546,16 +1556,16 @@ function AnalyseTab({
               const endTime = w.end_ts ? new Date(w.end_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
               return (
                 <div key={i} className="rounded border border-neutral-800 p-3">
-                  <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
                     <div>
                       <span className="font-medium">{sportName(w.sport_id)}</span>
                       <span className="ml-2 text-sm text-neutral-400">{time}{endTime && ` – ${endTime}`} · {w.minutes} min</span>
                     </div>
-                    <div className="flex gap-4 text-sm">
-                      <span>Strain <span className="text-amber-400 font-medium">{fmt(w.strain, 1)}</span></span>
-                      <span>Avg HR <span className="text-red-400 font-medium">{w.avg_hr ?? "—"}</span></span>
-                      <span>Max HR <span className="text-violet-400 font-medium">{w.max_hr ?? "—"}</span></span>
-                      <span>kcal <span className="text-white">{w.kj != null ? Math.round(w.kj / 4.184) : "—"}</span></span>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:flex sm:gap-4 sm:text-sm">
+                      <span className="text-neutral-400">Strain <span className="text-amber-400 font-medium">{fmt(w.strain, 1)}</span></span>
+                      <span className="text-neutral-400">Avg HR <span className="text-red-400 font-medium">{w.avg_hr ?? "—"}</span></span>
+                      <span className="text-neutral-400">Max HR <span className="text-violet-400 font-medium">{w.max_hr ?? "—"}</span></span>
+                      <span className="text-neutral-400">kcal <span className="text-white">{w.kj != null ? Math.round(w.kj / 4.184) : "—"}</span></span>
                     </div>
                   </div>
                   {w.zones && <ZoneBar zones={w.zones} totalMs={w.minutes * 60000} />}
