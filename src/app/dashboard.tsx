@@ -37,7 +37,18 @@ export type Sleep = {
   nap: boolean;
 };
 export type Strain = { day: string; strain: number | null; avg_hr: number | null; max_hr: number | null; kj: number | null };
-export type Workout = { day: string; start_ts: string; end_ts: string | null; sport_id: number | null; strain: number | null; kj: number | null; minutes: number; avg_hr: number | null; max_hr: number | null };
+export type Workout = {
+  day: string;
+  start_ts: string;
+  end_ts: string | null;
+  sport_id: number | null;
+  strain: number | null;
+  kj: number | null;
+  minutes: number;
+  avg_hr: number | null;
+  max_hr: number | null;
+  zones?: { z0: number; z1: number; z2: number; z3: number; z4: number; z5: number };
+};
 
 const RANGES = [
   { label: "14d", days: 14 },
@@ -47,7 +58,7 @@ const RANGES = [
   { label: "All", days: 9999 },
 ];
 
-const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Compare", "Insights", "Correlations"] as const;
+const TABS = ["Overview", "Recovery", "Sleep", "Strain", "Workouts", "Analyse", "Compare", "Insights", "Correlations"] as const;
 type Tab = typeof TABS[number];
 
 const TOOLTIP_STYLE = { background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 8, fontSize: 12 } as const;
@@ -122,6 +133,7 @@ export default function Dashboard({
       {tab === "Sleep" && <SleepTab sleep={s} />}
       {tab === "Strain" && <StrainTab strain={st} />}
       {tab === "Workouts" && <WorkoutsTab workouts={w} />}
+      {tab === "Analyse" && <AnalyseTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} />}
       {tab === "Compare" && <CompareTab recovery={recovery} sleep={sleep} strain={strain} workouts={workouts} />}
       {tab === "Insights" && <InsightsTab workouts={w} recovery={r} />}
       {tab === "Correlations" && <CorrelationsTab recovery={r} sleep={s} strain={st} />}
@@ -1315,6 +1327,258 @@ function CompareTab({
           </ResponsiveContainer>
         </Card>
       </Section>
+    </div>
+  );
+}
+
+// ---------- Analyse tab ----------
+
+const ZONE_COLORS = ["#374151", "#60a5fa", "#34d399", "#fbbf24", "#fb923c", "#ef4444"];
+const ZONE_LABELS = ["Z0 rest", "Z1 50-60%", "Z2 60-70%", "Z3 70-80%", "Z4 80-90%", "Z5 90-100%"];
+
+function ZoneBar({ zones, totalMs }: { zones: { z0: number; z1: number; z2: number; z3: number; z4: number; z5: number }; totalMs: number }) {
+  const arr = [zones.z0, zones.z1, zones.z2, zones.z3, zones.z4, zones.z5];
+  const total = totalMs || arr.reduce((a, b) => a + b, 0) || 1;
+  return (
+    <div>
+      <div className="flex h-4 w-full overflow-hidden rounded">
+        {arr.map((ms, i) => {
+          const pct = (ms / total) * 100;
+          if (pct < 0.5) return null;
+          return (
+            <div
+              key={i}
+              title={`${ZONE_LABELS[i]} — ${Math.round(ms / 60000)} min (${pct.toFixed(1)}%)`}
+              style={{ width: `${pct}%`, background: ZONE_COLORS[i] }}
+            />
+          );
+        })}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-neutral-400">
+        {arr.map((ms, i) => {
+          if (ms < 1000) return null;
+          return (
+            <span key={i}>
+              <span className="inline-block h-2 w-2 rounded-sm align-middle" style={{ background: ZONE_COLORS[i] }} />{" "}
+              Z{i} {Math.round(ms / 60000)}m
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, color = "text-white" }: { label: string; value: string; color?: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</div>
+      <div className={`text-xl font-semibold ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function AnalyseTab({
+  recovery,
+  sleep,
+  strain,
+  workouts,
+}: {
+  recovery: Recovery[];
+  sleep: Sleep[];
+  strain: Strain[];
+  workouts: Workout[];
+}) {
+  const allDays = useMemo(() => {
+    const s = new Set<string>();
+    recovery.forEach((x) => s.add(x.day));
+    sleep.forEach((x) => s.add(x.day));
+    strain.forEach((x) => s.add(x.day));
+    return [...s].sort().reverse();
+  }, [recovery, sleep, strain]);
+
+  const [day, setDay] = useState(allDays[0] ?? "");
+  const idx = allDays.indexOf(day);
+  const prevDay = idx >= 0 && idx < allDays.length - 1 ? allDays[idx + 1] : null;
+  const nextDay = idx > 0 ? allDays[idx - 1] : null;
+
+  if (!allDays.length) return <p className="text-sm text-neutral-400">No data yet.</p>;
+
+  const rec = recovery.find((x) => x.day === day);
+  const slpDay = sleep.filter((x) => x.day === day);
+  const cyc = strain.find((x) => x.day === day);
+  const wkts = workouts.filter((x) => x.day === day);
+
+  // 7-day surrounding context for mini sparkline-ish chart
+  const recIdx = recovery.findIndex((x) => x.day === day);
+  const ctx = recIdx >= 0 ? recovery.slice(Math.max(0, recIdx - 6), Math.min(recovery.length, recIdx + 7)) : [];
+
+  const dayDate = new Date(day);
+  const dayName = dayDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  const recColor = rec?.recovery_score == null ? "text-neutral-400" : rec.recovery_score >= 67 ? "text-emerald-400" : rec.recovery_score >= 34 ? "text-amber-400" : "text-red-400";
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => prevDay && setDay(prevDay)}
+            disabled={!prevDay}
+            className="rounded border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 disabled:opacity-30"
+          >
+            ← {prevDay ?? ""}
+          </button>
+          <input
+            type="date"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            className="rounded border border-neutral-700 bg-black px-3 py-1.5 text-sm"
+            min={allDays[allDays.length - 1]}
+            max={allDays[0]}
+          />
+          <button
+            onClick={() => nextDay && setDay(nextDay)}
+            disabled={!nextDay}
+            className="rounded border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 disabled:opacity-30"
+          >
+            {nextDay ?? ""} →
+          </button>
+          <span className="ml-auto text-neutral-400 text-sm">{dayName}</span>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Card>
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-lg font-semibold">Recovery</h3>
+            <span className={`text-4xl font-bold ${recColor}`}>{rec?.recovery_score ?? "—"}{rec?.recovery_score != null && "%"}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MiniStat label="HRV" value={rec?.hrv != null ? `${rec.hrv.toFixed(1)} ms` : "—"} color="text-blue-400" />
+            <MiniStat label="RHR" value={rec?.rhr != null ? `${rec.rhr} bpm` : "—"} color="text-red-400" />
+            <MiniStat label="SpO₂" value={rec?.spo2 != null ? `${rec.spo2.toFixed(1)}%` : "—"} />
+            <MiniStat label="Skin temp" value={rec?.skin_temp != null ? `${rec.skin_temp.toFixed(2)}°C` : "—"} />
+          </div>
+        </Card>
+
+        <Card>
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-lg font-semibold">Day strain</h3>
+            <span className="text-4xl font-bold text-amber-400">{cyc?.strain != null ? cyc.strain.toFixed(1) : "—"}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MiniStat label="Avg HR" value={cyc?.avg_hr != null ? `${cyc.avg_hr} bpm` : "—"} />
+            <MiniStat label="Max HR" value={cyc?.max_hr != null ? `${cyc.max_hr} bpm` : "—"} />
+            <MiniStat label="Energy" value={cyc?.kj != null ? `${(cyc.kj / 4.184).toFixed(0)} kcal` : "—"} />
+            <MiniStat label="Workouts" value={String(wkts.length)} />
+          </div>
+        </Card>
+      </div>
+
+      <Card>
+        <div className="mb-3 flex items-baseline justify-between">
+          <h3 className="text-lg font-semibold">Sleep</h3>
+          {slpDay.length > 0 && (
+            <span className="text-sm text-neutral-400">{slpDay.length} session{slpDay.length > 1 ? "s" : ""}</span>
+          )}
+        </div>
+        {!slpDay.length ? (
+          <p className="text-sm text-neutral-500">No sleep data for this day.</p>
+        ) : (
+          <div className="space-y-4">
+            {slpDay.map((s, i) => {
+              const totalMs = (s.swp + s.rem + s.light + s.awake) * 3600000;
+              const stages = [
+                { ms: s.swp * 3600000, color: "#1d4ed8", label: "Deep" },
+                { ms: s.rem * 3600000, color: "#7c3aed", label: "REM" },
+                { ms: s.light * 3600000, color: "#60a5fa", label: "Light" },
+                { ms: s.awake * 3600000, color: "#374151", label: "Awake" },
+              ];
+              return (
+                <div key={i}>
+                  <div className="mb-2 flex items-baseline justify-between">
+                    <span className="text-sm text-neutral-300">{s.nap ? "Nap" : "Main sleep"} · {s.hours_in_bed}h in bed</span>
+                    <span className="text-sm font-medium">{s.performance ?? "—"}% performance</span>
+                  </div>
+                  <div className="flex h-4 overflow-hidden rounded">
+                    {stages.map((st, j) => {
+                      const pct = (st.ms / totalMs) * 100;
+                      if (pct < 0.5) return null;
+                      return (
+                        <div
+                          key={j}
+                          title={`${st.label} — ${(st.ms / 3600000).toFixed(2)}h (${pct.toFixed(1)}%)`}
+                          style={{ width: `${pct}%`, background: st.color }}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-400 md:grid-cols-4">
+                    <span>Deep: <span className="text-white">{s.swp}h</span></span>
+                    <span>REM: <span className="text-white">{s.rem}h</span></span>
+                    <span>Light: <span className="text-white">{s.light}h</span></span>
+                    <span>Awake: <span className="text-white">{s.awake}h</span></span>
+                  </div>
+                  {!s.nap && (
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-400 md:grid-cols-4">
+                      <span>Efficiency: <span className="text-white">{s.efficiency ?? "—"}%</span></span>
+                      <span>Consistency: <span className="text-white">{s.consistency ?? "—"}%</span></span>
+                      <span>Disturbances: <span className="text-white">{s.disturbances ?? "—"}</span></span>
+                      <span>Resp rate: <span className="text-white">{s.respiratory_rate != null ? s.respiratory_rate.toFixed(1) : "—"}</span></span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <h3 className="mb-3 text-lg font-semibold">Workouts ({wkts.length})</h3>
+        {!wkts.length ? (
+          <p className="text-sm text-neutral-500">No workouts on this day.</p>
+        ) : (
+          <div className="space-y-4">
+            {wkts.map((w, i) => {
+              const time = new Date(w.start_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              const endTime = w.end_ts ? new Date(w.end_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+              return (
+                <div key={i} className="rounded border border-neutral-800 p-3">
+                  <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                    <div>
+                      <span className="font-medium">{sportName(w.sport_id)}</span>
+                      <span className="ml-2 text-sm text-neutral-400">{time}{endTime && ` – ${endTime}`} · {w.minutes} min</span>
+                    </div>
+                    <div className="flex gap-4 text-sm">
+                      <span>Strain <span className="text-amber-400 font-medium">{fmt(w.strain, 1)}</span></span>
+                      <span>Avg HR <span className="text-red-400 font-medium">{w.avg_hr ?? "—"}</span></span>
+                      <span>Max HR <span className="text-violet-400 font-medium">{w.max_hr ?? "—"}</span></span>
+                      <span>kcal <span className="text-white">{w.kj != null ? Math.round(w.kj / 4.184) : "—"}</span></span>
+                    </div>
+                  </div>
+                  {w.zones && <ZoneBar zones={w.zones} totalMs={w.minutes * 60000} />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <h3 className="mb-3 text-lg font-semibold">Surrounding context</h3>
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={ctx}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+            <XAxis dataKey="day" stroke="#666" tick={{ fontSize: 11 }} />
+            <YAxis domain={[0, 100]} stroke="#666" tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <ReferenceLine x={day} stroke="#fbbf24" strokeWidth={2} label={{ value: "today", fill: "#fbbf24", fontSize: 10 }} />
+            <Line type="monotone" dataKey="recovery_score" stroke="#10b981" strokeWidth={2} dot />
+          </LineChart>
+        </ResponsiveContainer>
+      </Card>
     </div>
   );
 }
