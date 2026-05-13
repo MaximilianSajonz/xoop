@@ -6,6 +6,7 @@ import {
   Line,
   BarChart,
   Bar,
+  Cell,
   ScatterChart,
   Scatter,
   XAxis,
@@ -463,7 +464,7 @@ function RecoveryDistribution({ data }: { data: Recovery[] }) {
         <Tooltip contentStyle={TOOLTIP_STYLE} />
         <Bar dataKey="count">
           {bins.map((b, i) => (
-            <Bar key={i} dataKey="count" fill={recoveryColor(b.mid)} />
+            <Cell key={i} fill={recoveryColor(b.mid)} />
           ))}
         </Bar>
       </BarChart>
