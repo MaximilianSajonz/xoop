@@ -1,6 +1,17 @@
 -- xoop schema — Whoop data mirror (API v2)
 -- run in Supabase SQL editor
 
+create table if not exists whoop_annotation (
+  id uuid primary key default gen_random_uuid(),
+  day date not null,
+  tag text not null,
+  value numeric,
+  note text,
+  created_at timestamptz default now()
+);
+create index if not exists whoop_annotation_day_idx on whoop_annotation (day);
+create index if not exists whoop_annotation_tag_idx on whoop_annotation (tag);
+
 create table if not exists whoop_tokens (
   id text primary key,
   access_token text not null,
